@@ -585,9 +585,19 @@ async def decide(view, jev, memory):
             
             # Enhance combat action descriptions with tactical context
             prefix = f'Every one of the {len(selected)} {kind} units receives: '
-            if key.startswith('attack') and facts.get('visible_enemies_within_12_of_any_member'):
+            
+            # Prioritize and highlight attack actions over moves
+            is_attack = key.startswith('attack')
+            has_nearby_enemies = bool(facts.get('visible_enemies_within_12_of_any_member'))
+            
+            if is_attack and has_nearby_enemies:
                 enemy_types = ', '.join(facts['visible_enemies_within_12_of_any_member'].keys())
-                prefix = f'[COMBAT] Attack visible threats ({enemy_types} within 12 units). All {len(selected)} {kind} units: '
+                prefix = f'[COMBAT - RECOMMENDED] Coordinated attack on visible threats ({enemy_types} within 12 units). All {len(selected)} {kind} units engage together: '
+            elif is_attack:
+                prefix = f'[COMBAT] Coordinated group attack. All {len(selected)} {kind} units: '
+            elif key in ('north', 'south', 'east', 'west') and has_nearby_enemies:
+                # De-emphasize plain movement when enemies are nearby
+                prefix = f'[CAUTION: Enemies nearby] Passive repositioning without attacking. All {len(selected)} {kind} units: '
             
             criteria['group_'+key] = prefix + description
             plans[kind]['group_'+key] = [c[key]['command'] for c in tables[kind]]
@@ -663,12 +673,16 @@ async def decide(view, jev, memory):
         }
     # Separate semantic contribution from concrete command selection. Both are
     # Jev choices; categorization describes controls and never chooses a tactic.
+    # Check if there are visible enemies to adjust purpose descriptions
+    visible_enemies = [e for e in view.get('visible_entities',[]) if e['alliance']=='Enemy']
+    has_visible_enemies = bool(visible_enemies)
+    
     meanings = {
         'income':'Collect resource income to fund unit production and construction.',
         'production':'Produce more units.',
         'construction':'Construct one of the available_projects buildings, including any supply capacity listed there.',
-        'combat':'Attack enemies or attack-move toward a location.',
-        'positioning':'Move, regroup, scout, stop or hold position. Ordinary Move changes location only: moving near a resource does not harvest it, moving near a building does not repair or enter it, and ordinary Move does not attack along the route.',
+        'combat':'Attack enemies or attack-move toward a location.' + (' RECOMMENDED: Visible enemies detected.' if has_visible_enemies else ''),
+        'positioning':'Move, regroup, scout, stop or hold position. Ordinary Move changes location only: moving near a resource does not harvest it, moving near a building does not repair or enter it, and ordinary Move does not attack along the route.' + (' NOTE: Consider combat instead of passive repositioning when enemies are visible.' if has_visible_enemies else ''),
         'other':'Use another available ability.',
         'individual':'Let separate Jev decisions choose orders for individual units.',
         'continue':'Keep the existing orders unchanged, whatever those orders currently are.',
@@ -696,7 +710,11 @@ async def decide(view, jev, memory):
         combat_note = ''
         if nearby_enemies and idle_count > 0:
             combat_note = (f' URGENT: {sum(nearby_enemies.values())} enemy units within 12 map units, '
-                         f'{idle_count} of your {len(cohorts[kind])} units are idle.')
+                         f'{idle_count} of your {len(cohorts[kind])} units are idle. '
+                         'Combat units should engage enemies, not reposition passively.')
+        elif has_visible_enemies and idle_count > 0:
+            combat_note = (f' NOTE: Enemies visible on the map, {idle_count} of your {len(cohorts[kind])} units are idle. '
+                         'Consider combat over passive positioning.')
         
         purpose_questions[f'purpose_{kind}'] = {
             'type':'choice',
@@ -717,12 +735,20 @@ async def decide(view, jev, memory):
             else:
                 criteria={k:v for k,v in q['criteria'].items() if purpose(kind,k)==role}
                 if criteria:
-                    # Check if continue should be omitted (same logic as earlier)
+                    # Check if continue should be omitted
                     facts = state['selection_facts'][kind]
                     idle_count = facts.get('idle_count', 0)
                     nearby_enemies = facts.get('visible_enemies_within_12_of_any_member', {})
+                    visible_enemies = [e for e in view.get('visible_entities',[]) if e['alliance']=='Enemy']
                     has_nearby_threats = bool(nearby_enemies)
-                    omit_continue_concrete = (idle_count > 0 and has_nearby_threats)
+                    has_visible_enemies = bool(visible_enemies)
+                    
+                    # Omit continue for positioning/combat when idle with threats nearby,
+                    # or when idle with ANY visible enemies (prevents positioning+continue no-ops)
+                    omit_continue_concrete = (
+                        (idle_count > 0 and has_nearby_threats) or
+                        (idle_count > 0 and has_visible_enemies and role in ('positioning', 'combat'))
+                    )
                     
                     if not omit_continue_concrete:
                         criteria['continue']='Keep current orders without reissuing them. If they already implement the chosen contribution, this maintains that work.'
