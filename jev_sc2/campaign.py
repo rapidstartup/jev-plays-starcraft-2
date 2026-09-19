@@ -112,7 +112,7 @@ def main():
     parser.add_argument('--call-budget',type=int,default=1000)
     parser.add_argument('--seconds-per-attempt',type=float,default=600)
     parser.add_argument('--max-attempts',type=int,default=3)
-    parser.add_argument('--max-age-loops',type=int,default=32,help='Discard decisions older than this many game loops; fresh command validation still applies')
+    parser.add_argument('--max-age-loops',type=int,default=64,help='Discard decisions older than this many game loops; fresh command validation still applies')
     parser.add_argument('--port',type=int,default=5001)
     parser.add_argument('--api-bookmark-recovery',action='store_true')
     parser.add_argument('--follow-camera',action='store_true')
