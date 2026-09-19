@@ -11,10 +11,24 @@ from websockets.exceptions import InvalidHandshake
 
 
 def find_executable(root):
-    choices = list(Path(root).expanduser().glob('Versions/Base*/SC2.app/Contents/MacOS/SC2'))
-    if not choices:
-        raise FileNotFoundError(f'No SC2 binary under {root}/Versions; finish Battle.net installation')
-    return max(choices, key=lambda p: int(p.parts[-5][4:]))
+    root_path = Path(root).expanduser()
+    
+    # Try macOS path first
+    choices = list(root_path.glob('Versions/Base*/SC2.app/Contents/MacOS/SC2'))
+    if choices:
+        return max(choices, key=lambda p: int(p.parts[-5][4:]))
+    
+    # Try Windows SC2_x64.exe (preferred)
+    choices = list(root_path.glob('Versions/Base*/SC2_x64.exe'))
+    if choices:
+        return max(choices, key=lambda p: int(p.parts[-2][4:]))
+    
+    # Try Windows SC2.exe (fallback)
+    choices = list(root_path.glob('Versions/Base*/SC2.exe'))
+    if choices:
+        return max(choices, key=lambda p: int(p.parts[-2][4:]))
+    
+    raise FileNotFoundError(f'No SC2 binary under {root}/Versions; finish Battle.net installation')
 
 
 def launch(root, port, logfile, window_size=(1280, 800), window_position=None):

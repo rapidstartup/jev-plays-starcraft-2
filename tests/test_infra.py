@@ -161,6 +161,34 @@ def test_latest_build_numerically(tmp_path):
     assert 'Base100' in str(find_executable(tmp_path))
 
 
+def test_windows_executable_discovery_prefers_x64(tmp_path):
+    for version in [9,100]:
+        (tmp_path/f'Versions/Base{version}').mkdir(parents=True)
+        (tmp_path/f'Versions/Base{version}/SC2_x64.exe').touch()
+    result = find_executable(tmp_path)
+    assert 'Base100' in str(result)
+    assert 'SC2_x64.exe' in str(result)
+
+
+def test_windows_executable_discovery_fallback_to_sc2(tmp_path):
+    for version in [9,100]:
+        (tmp_path/f'Versions/Base{version}').mkdir(parents=True)
+        (tmp_path/f'Versions/Base{version}/SC2.exe').touch()
+    result = find_executable(tmp_path)
+    assert 'Base100' in str(result)
+    assert 'SC2.exe' in str(result)
+
+
+def test_executable_discovery_prefers_mac_over_windows(tmp_path):
+    (tmp_path/'Versions/Base100/SC2.app/Contents/MacOS').mkdir(parents=True)
+    (tmp_path/'Versions/Base100/SC2.app/Contents/MacOS/SC2').touch()
+    (tmp_path/'Versions/Base50').mkdir(parents=True)
+    (tmp_path/'Versions/Base50/SC2_x64.exe').touch()
+    result = find_executable(tmp_path)
+    assert 'Base100' in str(result)
+    assert 'MacOS/SC2' in str(result)
+
+
 def test_real_websocket_protocol_roundtrip(tmp_path):
     from websockets.asyncio.server import serve
     map_path = tmp_path/'test.SC2Map'
