@@ -18,6 +18,20 @@ from .camera import choose_shot
 from .outcome import OutcomeMonitor
 
 ROOT = Path(__file__).resolve().parent.parent
+LOOPS_PER_REALTIME_SECOND = 22.4
+MINIMUM_DECISION_WAIT = 3.0
+
+
+def decision_wait_and_age_limit(max_age_loops, min_wait=MINIMUM_DECISION_WAIT,
+                                loops_per_second=LOOPS_PER_REALTIME_SECOND):
+    """Share one realtime budget between waiting for Jev and submitting.
+
+    The outer wait is at least min_wait seconds because multi-stage calls often
+    exceed max_age_loops/22.4. A finished-in-time decision is not discarded
+    solely for that mismatch. Older observations still drop.
+    """
+    wait = max(float(min_wait), max_age_loops / loops_per_second)
+    return wait, max(int(max_age_loops), int(wait * loops_per_second + 1e-9))
 
 
 def result_for_player(players, player_id):
@@ -115,9 +129,10 @@ async def run(args):
             log('replay_unavailable',error=str(exc))
     try:
         ping = await client.request('ping',sc.RequestPing())
+        decision_wait, age_limit = decision_wait_and_age_limit(args.max_age_loops)
         log('connected',version=ping.game_version,revision=loader.revision,
             objective=args.objective,seconds=args.seconds,max_calls=args.max_calls,
-            max_age_loops=args.max_age_loops)
+            max_age_loops=args.max_age_loops,effective_max_age_loops=age_limit)
         attached_info = None
         outcome_monitor = OutcomeMonitor.for_map(args.map, time.time())
         if args.map:
@@ -223,7 +238,7 @@ async def run(args):
             decision_start = time.monotonic()
             try:
                 commands = await asyncio.wait_for(loader.module.decide(view,jev,memory),
-                                                  max(3,args.max_age_loops/22.4))
+                                                  decision_wait)
                 failures = 0
             except CallBudgetReached:
                 log('stopped',reason='Jev call budget reached')
@@ -248,12 +263,12 @@ async def run(args):
                     api_status=sc.Status.Name(client.status))
                 break
             age = fresh.observation.game_loop-view['loop']
-            actions = validate_commands(commands,view,fresh) if age <= args.max_age_loops else []
+            actions = validate_commands(commands,view,fresh) if age <= age_limit else []
             results = []
             if actions:
                 response = await client.request('action',sc.RequestAction(actions=actions))
                 results = list(response.result)
-            feedback = action_feedback(actions,results,view['loop'],len(commands),age,args.max_age_loops)
+            feedback = action_feedback(actions,results,view['loop'],len(commands),age,age_limit)
             history = memory.setdefault('action_feedback',[])
             history.append(feedback)
             memory['action_feedback'] = history[-8:]
@@ -288,7 +303,8 @@ def main():
     parser.add_argument('--seconds',type=float,default=180)
     parser.add_argument('--max-calls',type=int,default=300)
     parser.add_argument('--interval',type=float,default=0.35)
-    parser.add_argument('--max-age-loops',type=int,default=64)
+    parser.add_argument('--max-age-loops',type=int,default=64,
+                        help='Discard decisions older than this many game loops; the 3s Jev wait can extend the cutoff so a finished-in-time call is not dropped')
     parser.add_argument('--objective',default='Keep your units alive and defeat visible enemy units.')
     parser.add_argument('--doctor',action='store_true')
     args=parser.parse_args()

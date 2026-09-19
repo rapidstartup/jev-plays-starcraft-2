@@ -2272,3 +2272,21 @@ The current map must remain traynor02-outcomes-lab169c.SC2Map. The new reconnect
 monitor can arm from its active ending bank. Verify actual UI outcome before
 clearing the remaining checkpoint review gate. All three campaigns remain the
 goal; funding currently prevents further Jev-driven play.
+
+### Lab172 — MarineMicro zero-submit ticks: idle continue and stale discard
+
+MSI run 20260919T163950.436633Z wiped 10 Marines (score 450→0). Every tick had
+`submitted: 0`. Many ticks had empty `commands` because `purpose_choice` was
+`combat` while `group_choice` was `continue`; continue emits no orders, so idle
+marines never attacked. Early ticks also had `decision_age_loops` 45–53 against
+default `max_age_loops=32`, so even non-empty commands were discarded. The
+decision wait is at least three seconds (~67 loops), longer than that stale
+cutoff.
+
+Do not offer continue when it would no-op: idle selections with a combat purpose,
+or idle selections already under threat, must pick a Jev-selected concrete order.
+Continue remains available when current orders already implement the work
+(including existing attack queues). Raise the default age budget to 64 loops and
+share one wait/submit budget so a finished-in-time call is not dropped; older
+observations still discard. No second model and no scripted attack fallback.
+Regression tests cover the idle-continue menu and the 45–53 loop stale window.

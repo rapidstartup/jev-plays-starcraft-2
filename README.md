@@ -28,7 +28,8 @@ contains the latest experiments and current limitations.
    An ordinary Battle.net-launched game has no API socket; it cannot simply be attached.
 
 Defaults: real time, 180 seconds, at most 300 successful Jev calls, no automatic
-retries, and decisions older than 32 game loops discarded. SC2 keeps running after
+retries, and decisions older than 64 game loops discarded (the 3s Jev wait can
+extend that slightly so a finished-in-time call is not dropped). SC2 keeps running after
 the harness exits. Stop it through its UI when finished. Runs and replays live in
 `runs/` and stay out of Git. The provider-side key spending cap is separate from the per-run call budget.
 
