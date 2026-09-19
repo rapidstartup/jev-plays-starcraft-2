@@ -629,9 +629,19 @@ def test_continue_predicates_distinguish_idle_combat_from_existing_work():
     import player
     idle={'count':10,'idle_count':10,'current_order_counts':{}}
     attacking={'count':10,'idle_count':0,'current_order_counts':{'Attack Attack':10}}
+    moving={'count':10,'idle_count':0,'current_order_counts':{'Move Move':10}}
+    stopping={'count':10,'idle_count':0,'current_order_counts':{'Stop':10}}
     threat={**idle,'visible_enemies_within_12_of_any_member':{'Zergling':4},
             'nearest_visible_enemy_distance':5}
     visible={**idle,'nearest_visible_enemy_distance':24}
+    moving_visible={**moving,'nearest_visible_enemy_distance':24}
+    moving_threat={**moving,'visible_enemies_within_12_of_any_member':{'Zergling':4},
+                   'nearest_visible_enemy_distance':5}
+    stopping_visible={**stopping,'nearest_visible_enemy_distance':8}
+    attacking_visible={**attacking,'nearest_visible_enemy_distance':5,
+                       'visible_enemies_within_12_of_any_member':{'Zergling':4}}
+    damaged_moving={**moving,'damaged_count':3,'lowest_health_percent':40}
+    shrinking_moving={**moving,'count_change_since_previous_decision':-2}
     assert player.continue_would_idle(idle,'combat')
     assert not player.continue_would_idle(idle,'positioning')
     assert player.continue_would_idle(visible,'positioning')
@@ -639,6 +649,17 @@ def test_continue_predicates_distinguish_idle_combat_from_existing_work():
     assert not player.continue_would_idle(attacking,'combat')
     assert player.continue_would_idle(threat)
     assert player.continue_would_idle(threat,'continue')
+    assert player.continue_would_idle(moving_visible,'positioning')
+    assert player.continue_would_idle(moving_threat,'positioning')
+    assert player.continue_would_idle(moving_threat,'combat')
+    assert player.continue_would_idle(stopping_visible,'positioning')
+    assert not player.continue_would_idle(attacking_visible,'combat')
+    assert not player.continue_would_idle(attacking_visible,'positioning')
+    assert player.continue_would_idle(damaged_moving,'positioning')
+    assert player.continue_would_idle(shrinking_moving,'positioning')
+    assert not player.current_orders_are_useful(moving_visible,'positioning')
+    assert player.current_orders_are_useful(attacking_visible,'positioning')
+    assert player.current_orders_are_useful(attacking_visible,'combat')
 
 
 def test_idle_combat_purpose_does_not_noop_via_continue():
@@ -718,6 +739,35 @@ def test_continue_remains_available_when_combat_orders_already_exist():
             assert 'continue' in questions['Marine']['criteria']
             return {'Marine':{'choice':'continue'}}
     assert asyncio.run(player.decide({'loop':1,'self':units},Model(),{}))==[]
+
+
+def test_positioning_move_orders_with_visible_enemies_suppress_continue():
+    import player
+    move={'unit_tag':1,'ability_id':16,'point':[0,6]}
+    units=[{'tag':1,'type':'Marine','position':[0,0],'orders':[{'ability':'Move Move'}],
+            'candidates':[
+                {'id':'north','description':'Move north','command':move},
+                {'id':'attack_move_east','description':'Attack-move east',
+                 'command':{'unit_tag':1,'ability_id':23,'point':[8,0]}}]}]
+    logs=[]
+    class Model:
+        def log(self,event,**fields): logs.append((event,fields))
+        async def ask(self,state,questions):
+            if 'strategy' in questions:
+                return {'strategy':{'choice':'protect'}}
+            if 'purpose_Marine' in questions:
+                assert 'continue' not in questions['purpose_Marine']['criteria']
+                combat = questions['purpose_Marine']['criteria']['combat']
+                positioning = questions['purpose_Marine']['criteria']['positioning']
+                assert 'Attack or Attack-Move' in combat
+                assert 'Attack or Attack-Move' in positioning
+                return {'purpose_Marine':{'choice':'positioning'}}
+            assert 'continue' not in questions['Marine']['criteria']
+            assert 'group_north' in questions['Marine']['criteria']
+            return {'Marine':{'choice':'group_north'}}
+    view={'loop':1,'self':units,'visible_entities':[{'type':'Zergling','alliance':'Enemy','position':[20,20]}]}
+    assert asyncio.run(player.decide(view,Model(),{}))==[move]
+    assert any(event=='continue_suppressed' for event,_ in logs)
 
 
 def test_income_observation_distinguishes_missing_from_zero():

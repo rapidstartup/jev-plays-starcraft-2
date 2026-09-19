@@ -343,6 +343,21 @@ async def arbitrate_spending(commands, view, state, jev):
     return [cmd for i,cmd in enumerate(commands) if i not in spending or i==selected]
 
 
+def enemies_are_visible(facts):
+    return (facts.get('nearest_visible_enemy_distance') is not None
+            or bool(facts.get('visible_enemies_within_12_of_any_member')))
+
+
+def current_orders_include_attack(facts):
+    return any('attack' in str(name).lower() for name in (facts.get('current_order_counts') or {}))
+
+
+def selection_in_engagement(facts):
+    return (enemies_are_visible(facts)
+            or (facts.get('damaged_count') or 0) > 0
+            or (facts.get('count_change_since_previous_decision') or 0) < 0)
+
+
 def current_orders_are_useful(facts, purpose=None):
     """False when the selection is idle or has no work that implements purpose."""
     count = facts.get('count') or 0
@@ -353,7 +368,11 @@ def current_orders_are_useful(facts, purpose=None):
     if not orders:
         return False
     if purpose == 'combat':
-        return any('attack' in str(name).lower() for name in orders)
+        return current_orders_include_attack(facts)
+    # Move/Stop/Patrol/Hold do not fight. Positioning queues are not useful work
+    # while enemies are visible, units are damaged, or the selection is shrinking.
+    if purpose == 'positioning' and selection_in_engagement(facts):
+        return current_orders_include_attack(facts)
     return True
 
 
@@ -365,10 +384,13 @@ def selection_under_threat(facts):
 
 def continue_would_idle(facts, purpose=None):
     """Continue emits no commands. That is a no-op when idle units need work."""
+    visible = enemies_are_visible(facts)
+    # Positioning or combat plus visible/damaged engagement and no Attack queue
+    # is a continue no-op; Move/Stop must not count as useful fighting work.
+    if purpose in ('positioning', 'combat') and selection_in_engagement(facts) and not current_orders_include_attack(facts):
+        return True
     if current_orders_are_useful(facts, purpose):
         return False
-    visible = (facts.get('nearest_visible_enemy_distance') is not None
-               or bool(facts.get('visible_enemies_within_12_of_any_member')))
     return (purpose == 'combat' or (purpose == 'positioning' and visible)
             or selection_under_threat(facts))
 
@@ -591,9 +613,14 @@ async def decide(view, jev, memory):
         idle_count = facts.get('idle_count', 0)
         nearby_enemies = facts.get('visible_enemies_within_12_of_any_member', {})
         has_nearby_threats = bool(nearby_enemies)
+        continue_hint = ''
+        if facts.get('nearest_visible_enemy_distance') is not None or has_nearby_threats:
+            continue_hint = (' Prefer Attack or Attack-Move over keeping Move, Stop, Patrol or Hold '
+                             'when enemies are visible; those non-combat queues do not fight.')
         criteria = {'individual':'Choose separate orders for these units using further Jev decisions.',
                     'continue':(f'Keep the current orders of these units unchanged. Currently idle: '
-                                f'{idle_count}/{len(selected)}; current orders: {facts.get("current_order_counts", {})}.')}
+                                f'{idle_count}/{len(selected)}; current orders: {facts.get("current_order_counts", {})}.'
+                                f'{continue_hint}')}
         plans[kind] = {}
         support_plans[kind] = {}
         for key in sorted(common):
@@ -682,7 +709,8 @@ async def decide(view, jev, memory):
             combat_guidance = (f' COMBAT SITUATION: {sum(nearby_enemies.values())} enemy units within 12 map units '
                              f'({", ".join(f"{count} {typ}" for typ, count in nearby_enemies.items())}). '
                              f'Idle units: {idle_count}/{len(selected)}. '
-                             'Prioritize engagement over inaction when units are idle and enemies are close.')
+                             'Prioritize engagement over inaction when units are idle and enemies are close. '
+                             'Prefer Attack or Attack-Move over Move or Stop; ordinary Move and Stop do not fight.')
         
         questions[kind] = {
             'type':'choice',
@@ -706,11 +734,11 @@ async def decide(view, jev, memory):
         'income':'Collect resource income to fund unit production and construction.',
         'production':'Produce more units.',
         'construction':'Construct one of the available_projects buildings, including any supply capacity listed there.',
-        'combat':'Attack enemies or attack-move toward a location.' + (' RECOMMENDED: Visible enemies detected.' if has_visible_enemies else ''),
-        'positioning':'Move, regroup, scout, stop or hold position. Ordinary Move changes location only: moving near a resource does not harvest it, moving near a building does not repair or enter it, and ordinary Move does not attack along the route.' + (' NOTE: Consider combat instead of passive repositioning when enemies are visible.' if has_visible_enemies else ''),
+        'combat':'Attack enemies or attack-move toward a location.' + (' RECOMMENDED: Visible enemies detected. Prefer Attack or Attack-Move over Move or Stop; ordinary Move and Stop do not fight.' if has_visible_enemies else ''),
+        'positioning':'Move, regroup, scout, stop or hold position. Ordinary Move changes location only: moving near a resource does not harvest it, moving near a building does not repair or enter it, and ordinary Move does not attack along the route.' + (' When enemies are visible, prefer Attack or Attack-Move over Move, Stop, Patrol or Hold; those orders do not fight.' if has_visible_enemies else ''),
         'other':'Use another available ability.',
         'individual':'Let separate Jev decisions choose orders for individual units.',
-        'continue':'Keep the existing orders unchanged, whatever those orders currently are.',
+        'continue':'Keep the existing orders unchanged, whatever those orders currently are.' + (' If current queues are only Move, Stop, Patrol or Hold while enemies are visible, that does not attack; prefer Attack or Attack-Move.' if has_visible_enemies else ''),
     }
     def purpose(kind,key):
         if key in ('continue','individual'):
@@ -729,7 +757,7 @@ async def decide(view, jev, memory):
     for kind,q in questions.items():
         offered = {purpose(kind,k) for k in q['criteria']}
         facts = state.get('selection_facts',{}).get(kind,{})
-        if continue_would_idle(facts):
+        if continue_would_idle(facts) or continue_would_idle(facts, 'positioning'):
             offered.discard('continue')
         nearby_enemies = facts.get('visible_enemies_within_12_of_any_member') or {}
         idle_count = facts.get('idle_count', 0)
@@ -737,10 +765,12 @@ async def decide(view, jev, memory):
         if nearby_enemies and idle_count > 0:
             combat_note = (f' URGENT: {sum(nearby_enemies.values())} enemy units within 12 map units, '
                          f'{idle_count} of your {len(cohorts[kind])} units are idle. '
-                         'Combat units should engage enemies, not reposition passively.')
+                         'Prefer Attack or Attack-Move over Move or Stop; combat units should engage enemies, not reposition passively.')
         elif has_visible_enemies and idle_count > 0:
             combat_note = (f' NOTE: Enemies visible on the map, {idle_count} of your {len(cohorts[kind])} units are idle. '
-                         'Consider combat over passive positioning.')
+                         'Prefer Attack or Attack-Move over Move or Stop; consider combat over passive positioning.')
+        elif has_visible_enemies:
+            combat_note = (' Visible enemies are present. Prefer combat Attack or Attack-Move over positioning Move, Stop, Patrol or Hold.')
         purpose_questions[f'purpose_{kind}'] = {
             'type':'choice',
             'instructions':f'Choose how the {len(cohorts[kind])} {kind} units should contribute to completing the mission now. '
@@ -774,7 +804,8 @@ async def decide(view, jev, memory):
                         jev.log('continue_suppressed',loop=view['loop'],cohort=kind,purpose=role,
                                 idle_count=facts.get('idle_count'),current_order_counts=facts.get('current_order_counts'))
                     else:
-                        criteria['continue']='Keep current orders without reissuing them. If they already implement the chosen contribution, this maintains that work.'
+                        criteria['continue']=('Keep current orders without reissuing them. If they already implement the chosen contribution, this maintains that work.'
+                                              + (' Prefer this when the current queue is Attack or Attack-Move; do not keep Move or Stop instead of fighting visible enemies.' if has_visible_enemies else ''))
                     concrete_questions[kind]={**q,'criteria':criteria,
                                               'instructions':q['instructions']+' Jev selected this contribution: '+meanings[role]}
         if concrete_questions:
