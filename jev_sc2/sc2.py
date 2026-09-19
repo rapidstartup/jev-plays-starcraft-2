@@ -11,10 +11,24 @@ from websockets.exceptions import InvalidHandshake
 
 
 def find_executable(root):
-    choices = list(Path(root).expanduser().glob('Versions/Base*/SC2.app/Contents/MacOS/SC2'))
-    if not choices:
-        raise FileNotFoundError(f'No SC2 binary under {root}/Versions; finish Battle.net installation')
-    return max(choices, key=lambda p: int(p.parts[-5][4:]))
+    root_path = Path(root).expanduser()
+    
+    # Try macOS path first
+    choices = list(root_path.glob('Versions/Base*/SC2.app/Contents/MacOS/SC2'))
+    if choices:
+        return max(choices, key=lambda p: int(p.parts[-5][4:]))
+    
+    # Try Windows SC2_x64.exe (preferred)
+    choices = list(root_path.glob('Versions/Base*/SC2_x64.exe'))
+    if choices:
+        return max(choices, key=lambda p: int(p.parts[-2][4:]))
+    
+    # Try Windows SC2.exe (fallback)
+    choices = list(root_path.glob('Versions/Base*/SC2.exe'))
+    if choices:
+        return max(choices, key=lambda p: int(p.parts[-2][4:]))
+    
+    raise FileNotFoundError(f'No SC2 binary under {root}/Versions; finish Battle.net installation')
 
 
 def launch(root, port, logfile, window_size=(1280, 800), window_position=None):
@@ -31,8 +45,21 @@ def launch(root, port, logfile, window_size=(1280, 800), window_position=None):
             '-windowheight', str(window_size[1])]
     if window_position is not None:
         args += ['-windowx', str(window_position[0]), '-windowy', str(window_position[1])]
+    
+    env = None
+    if os.name == 'nt':
+        root_path = Path(root).expanduser().resolve()
+        support_dirs = []
+        for dirname in ('Support64', 'Support'):
+            support_path = root_path / dirname
+            if support_path.is_dir():
+                support_dirs.append(str(support_path))
+        if support_dirs:
+            env = os.environ.copy()
+            env['PATH'] = os.pathsep.join(support_dirs) + os.pathsep + env.get('PATH', '')
+    
     return subprocess.Popen(args,
-                            cwd=str(Path(root).expanduser()), stdout=logfile, stderr=logfile)
+                            cwd=str(Path(root).expanduser()), stdout=logfile, stderr=logfile, env=env)
 
 
 class SC2:
