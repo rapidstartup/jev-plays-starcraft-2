@@ -343,6 +343,33 @@ async def arbitrate_spending(commands, view, state, jev):
     return [cmd for i,cmd in enumerate(commands) if i not in spending or i==selected]
 
 
+def current_orders_are_useful(facts, purpose=None):
+    """False when the selection is idle or has no work that implements purpose."""
+    count = facts.get('count') or 0
+    idle = facts.get('idle_count') or 0
+    orders = facts.get('current_order_counts') or {}
+    if count > 0 and idle >= count:
+        return False
+    if not orders:
+        return False
+    if purpose == 'combat':
+        return any('attack' in str(name).lower() for name in orders)
+    return True
+
+
+def selection_under_threat(facts):
+    nearby = facts.get('visible_enemies_within_12_of_any_member') or {}
+    distance = facts.get('nearest_visible_enemy_distance')
+    return bool(nearby) or (isinstance(distance,(int,float)) and math.isfinite(distance) and distance <= 12)
+
+
+def continue_would_idle(facts, purpose=None):
+    """Continue emits no commands. That is a no-op when idle units need work."""
+    if current_orders_are_useful(facts, purpose):
+        return False
+    return purpose == 'combat' or selection_under_threat(facts)
+
+
 def selection_facts(view, cohorts, previous_counts):
     facts = {}
     for kind, selected in cohorts.items():
@@ -661,26 +688,46 @@ async def decide(view, jev, memory):
         if tables[kind][0][action_id]['description'].startswith('Train '): return 'production'
         if action_id.startswith('ability_'): return 'other'
         return 'positioning'
-    purpose_questions = {f'purpose_{kind}': {
-        'type':'choice',
-        'instructions':f'Choose how the {len(cohorts[kind])} {kind} units should contribute to completing the mission now. '
-                       'Different unit types can make different contributions to the same strategy. '
-                       'Use their capabilities, current orders, resources and threats.',
-        'criteria':{p:meanings[p]+((' Available: '+'; '.join(state['selection_facts'][kind]['available_support_abilities'])) if p=='other' else '')
-                    for p in sorted({purpose(kind,k) for k in q['criteria']})},
-    } for kind,q in questions.items()}
+    purpose_questions = {}
+    for kind,q in questions.items():
+        offered = {purpose(kind,k) for k in q['criteria']}
+        facts = state.get('selection_facts',{}).get(kind,{})
+        if continue_would_idle(facts):
+            offered.discard('continue')
+        purpose_questions[f'purpose_{kind}'] = {
+            'type':'choice',
+            'instructions':f'Choose how the {len(cohorts[kind])} {kind} units should contribute to completing the mission now. '
+                           'Different unit types can make different contributions to the same strategy. '
+                           'Use their capabilities, current orders, resources and threats.',
+            'criteria':{p:meanings[p]+((' Available: '+'; '.join(state['selection_facts'][kind]['available_support_abilities'])) if p=='other' else '')
+                        for p in sorted(offered)},
+        }
     async def choose_orders():
         roles = await choose_contributions(view,state,purpose_questions,jev,memory)
         answers, concrete_questions = {}, {}
         for kind,q in questions.items():
             role=roles.get(f'purpose_{kind}',{}).get('choice')
             jev.log('purpose_choice',loop=view['loop'],cohort=kind,choice=role)
-            if role in ('continue','individual'):
+            facts=state.get('selection_facts',{}).get(kind,{})
+            if role == 'individual':
                 answers[kind]={'choice':role}
-            else:
+            elif role == 'continue' and not continue_would_idle(facts, role):
+                answers[kind]={'choice':role}
+            elif role == 'continue':
+                criteria={k:v for k,v in q['criteria'].items() if k != 'continue'}
+                if criteria:
+                    jev.log('continue_suppressed',loop=view['loop'],cohort=kind,purpose=role,
+                            idle_count=facts.get('idle_count'),current_order_counts=facts.get('current_order_counts'))
+                    concrete_questions[kind]={**q,'criteria':criteria,
+                                              'instructions':q['instructions']+' Existing queues are empty; choose an order that implements a contribution.'}
+            elif role:
                 criteria={k:v for k,v in q['criteria'].items() if purpose(kind,k)==role}
                 if criteria:
-                    criteria['continue']='Keep current orders without reissuing them. If they already implement the chosen contribution, this maintains that work.'
+                    if continue_would_idle(facts, role):
+                        jev.log('continue_suppressed',loop=view['loop'],cohort=kind,purpose=role,
+                                idle_count=facts.get('idle_count'),current_order_counts=facts.get('current_order_counts'))
+                    else:
+                        criteria['continue']='Keep current orders without reissuing them. If they already implement the chosen contribution, this maintains that work.'
                     concrete_questions[kind]={**q,'criteria':criteria,
                                               'instructions':q['instructions']+' Jev selected this contribution: '+meanings[role]}
         if concrete_questions:

@@ -612,6 +612,90 @@ def test_engine_feedback_distinguishes_rejection_acceptance_and_stale_drop():
     assert action_feedback([],[],100,1,40,32)['discarded_as_stale']
 
 
+def test_realtime_age_budget_covers_marine_micro_latency_without_dropping_the_guard():
+    from jev_sc2.__main__ import action_feedback, decision_wait_and_age_limit
+    wait, limit = decision_wait_and_age_limit(32)
+    assert wait == 3
+    assert limit >= 53  # MSI 20260919T163950 ages were 45-53 against max_age=32
+    assert not action_feedback([],[],100,1,53,limit)['discarded_as_stale']
+    assert action_feedback([],[],100,1,limit+1,limit)['discarded_as_stale']
+    wait64, limit64 = decision_wait_and_age_limit(64)
+    assert wait64 == 3 and limit64 >= 64
+    wait128, limit128 = decision_wait_and_age_limit(128)
+    assert wait128 == 128/22.4 and limit128 == 128
+
+
+def test_continue_predicates_distinguish_idle_combat_from_existing_work():
+    import player
+    idle={'count':10,'idle_count':10,'current_order_counts':{}}
+    attacking={'count':10,'idle_count':0,'current_order_counts':{'Attack Attack':10}}
+    threat={**idle,'visible_enemies_within_12_of_any_member':{'Zergling':4},
+            'nearest_visible_enemy_distance':5}
+    assert player.continue_would_idle(idle,'combat')
+    assert not player.continue_would_idle(idle,'positioning')
+    assert not player.continue_would_idle(attacking,'combat')
+    assert player.continue_would_idle(threat)
+    assert player.continue_would_idle(threat,'continue')
+
+
+def test_idle_combat_purpose_does_not_noop_via_continue():
+    import player
+    attack={'unit_tag':1,'ability_id':23,'point':[8,0]}
+    units=[{'tag':1,'type':'Marine','position':[0,0],'orders':[],
+            'candidates':[
+                {'id':'attack_move_east','description':'Attack-move east','command':attack},
+                {'id':'north','description':'Move north','command':{'unit_tag':1,'ability_id':16,'point':[0,6]}}]}]
+    logs=[]
+    class Model:
+        def log(self,event,**fields): logs.append((event,fields))
+        async def ask(self,state,questions):
+            if 'strategy' in questions:
+                return {'strategy':{'choice':'attack'}}
+            if 'purpose_Marine' in questions:
+                return {'purpose_Marine':{'choice':'combat'}}
+            assert 'continue' not in questions['Marine']['criteria']
+            assert 'group_attack_move_east' in questions['Marine']['criteria']
+            return {'Marine':{'choice':'group_attack_move_east'}}
+    assert asyncio.run(player.decide({'loop':1,'self':units},Model(),{}))==[attack]
+    assert any(event=='continue_suppressed' for event,_ in logs)
+
+
+def test_idle_units_under_threat_cannot_choose_purpose_continue():
+    import player
+    attack={'unit_tag':1,'ability_id':23,'point':[5,0]}
+    units=[{'tag':1,'type':'Marine','position':[0,0],'orders':[],
+            'candidates':[{'id':'attack_move_east','description':'Attack-move east','command':attack}]}]
+    class Model:
+        def log(self,*args,**kwargs): pass
+        async def ask(self,state,questions):
+            if 'strategy' in questions:
+                return {'strategy':{'choice':'protect'}}
+            if 'purpose_Marine' in questions:
+                assert 'continue' not in questions['purpose_Marine']['criteria']
+                return {'purpose_Marine':{'choice':'combat'}}
+            assert 'continue' not in questions['Marine']['criteria']
+            return {'Marine':{'choice':'group_attack_move_east'}}
+    view={'loop':1,'self':units,'visible_entities':[{'type':'Zergling','alliance':'Enemy','position':[5,0]}]}
+    assert asyncio.run(player.decide(view,Model(),{}))==[attack]
+
+
+def test_continue_remains_available_when_combat_orders_already_exist():
+    import player
+    attack={'unit_tag':1,'ability_id':23,'point':[8,0]}
+    units=[{'tag':1,'type':'Marine','position':[0,0],'orders':[{'ability':'Attack Attack'}],
+            'candidates':[{'id':'attack_move_east','description':'Attack-move east','command':attack}]}]
+    class Model:
+        def log(self,*args,**kwargs): pass
+        async def ask(self,state,questions):
+            if 'strategy' in questions:
+                return {'strategy':{'choice':'attack'}}
+            if 'purpose_Marine' in questions:
+                return {'purpose_Marine':{'choice':'combat'}}
+            assert 'continue' in questions['Marine']['criteria']
+            return {'Marine':{'choice':'continue'}}
+    assert asyncio.run(player.decide({'loop':1,'self':units},Model(),{}))==[]
+
+
 def test_income_observation_distinguishes_missing_from_zero():
     from s2clientprotocol import query_pb2 as query
     class Client:
