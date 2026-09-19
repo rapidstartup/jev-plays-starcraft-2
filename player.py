@@ -367,7 +367,10 @@ def continue_would_idle(facts, purpose=None):
     """Continue emits no commands. That is a no-op when idle units need work."""
     if current_orders_are_useful(facts, purpose):
         return False
-    return purpose == 'combat' or selection_under_threat(facts)
+    visible = (facts.get('nearest_visible_enemy_distance') is not None
+               or bool(facts.get('visible_enemies_within_12_of_any_member')))
+    return (purpose == 'combat' or (purpose == 'positioning' and visible)
+            or selection_under_threat(facts))
 
 
 def selection_facts(view, cohorts, previous_counts):
@@ -584,8 +587,13 @@ async def decide(view, jev, memory):
     for kind, selected in cohorts.items():
         tables[kind] = [{c['id']:c for c in u['candidates']} for u in selected]
         common = set.intersection(*(set(c) for c in tables[kind]))
+        facts = state['selection_facts'][kind]
+        idle_count = facts.get('idle_count', 0)
+        nearby_enemies = facts.get('visible_enemies_within_12_of_any_member', {})
+        has_nearby_threats = bool(nearby_enemies)
         criteria = {'individual':'Choose separate orders for these units using further Jev decisions.',
-                    'continue':'Keep the current orders of these units unchanged.'}
+                    'continue':(f'Keep the current orders of these units unchanged. Currently idle: '
+                                f'{idle_count}/{len(selected)}; current orders: {facts.get("current_order_counts", {})}.')}
         plans[kind] = {}
         support_plans[kind] = {}
         for key in sorted(common):
@@ -599,7 +607,24 @@ async def decide(view, jev, memory):
                          for u,t in zip(selected,tables[kind]) if 'point' in t[key]['command']]
             if distances:
                 description += f'; travel distances across selection: {min(distances):.1f} to {max(distances):.1f}'
-            criteria['group_'+key] = f'Every one of the {len(selected)} {kind} units receives: ' + description
+            
+            # Enhance combat action descriptions with tactical context
+            prefix = f'Every one of the {len(selected)} {kind} units receives: '
+            
+            # Prioritize and highlight attack actions over moves
+            is_attack = key.startswith('attack')
+            has_nearby_enemies = bool(facts.get('visible_enemies_within_12_of_any_member'))
+            
+            if is_attack and has_nearby_enemies:
+                enemy_types = ', '.join(facts['visible_enemies_within_12_of_any_member'].keys())
+                prefix = f'[COMBAT - RECOMMENDED] Coordinated attack on visible threats ({enemy_types} within 12 units). All {len(selected)} {kind} units engage together: '
+            elif is_attack:
+                prefix = f'[COMBAT] Coordinated group attack. All {len(selected)} {kind} units: '
+            elif key in ('north', 'south', 'east', 'west') and has_nearby_enemies:
+                # De-emphasize plain movement when enemies are nearby
+                prefix = f'[CAUTION: Enemies nearby] Passive repositioning without attacking. All {len(selected)} {kind} units: '
+            
+            criteria['group_'+key] = prefix + description
             plans[kind]['group_'+key] = [c[key]['command'] for c in tables[kind]]
         # Support need not redirect an entire cohort. Collect each offered
         # target once; a later Jev answer chooses its executor(s).
@@ -651,6 +676,14 @@ async def decide(view, jev, memory):
                     plans[kind][option]=[candidate['command']]
         if not any(u['candidates'] for u in selected):
             continue  # No non-purchase action exists for Jev to choose here.
+        # Add combat-specific guidance when threats are nearby
+        combat_guidance = ''
+        if has_nearby_threats:
+            combat_guidance = (f' COMBAT SITUATION: {sum(nearby_enemies.values())} enemy units within 12 map units '
+                             f'({", ".join(f"{count} {typ}" for typ, count in nearby_enemies.items())}). '
+                             f'Idle units: {idle_count}/{len(selected)}. '
+                             'Prioritize engagement over inaction when units are idle and enemies are close.')
+        
         questions[kind] = {
             'type':'choice',
             'instructions':f'Choose the next order for the {len(selected)} {kind} units to advance the mission objective. '
@@ -660,17 +693,21 @@ async def decide(view, jev, memory):
                            'Count alone is not local fighting strength: max_separation and nearest-selection-member distances describe dispersion. '
                            'Use selection_facts for unit counts, recent changes, damage and economic capabilities. '
                            'Consider the strategic priority chosen by Jev alongside immediate threats. '
-                           'Snapshot locations are stale, not live visible targets.',
+                           'Snapshot locations are stale, not live visible targets.' + combat_guidance,
             'criteria':criteria,
         }
     # Separate semantic contribution from concrete command selection. Both are
     # Jev choices; categorization describes controls and never chooses a tactic.
+    # Check if there are visible enemies to adjust purpose descriptions
+    visible_enemies = [e for e in view.get('visible_entities',[]) if e['alliance']=='Enemy']
+    has_visible_enemies = bool(visible_enemies)
+    
     meanings = {
         'income':'Collect resource income to fund unit production and construction.',
         'production':'Produce more units.',
         'construction':'Construct one of the available_projects buildings, including any supply capacity listed there.',
-        'combat':'Attack enemies or attack-move toward a location.',
-        'positioning':'Move, regroup, scout, stop or hold position. Ordinary Move changes location only: moving near a resource does not harvest it, moving near a building does not repair or enter it, and ordinary Move does not attack along the route.',
+        'combat':'Attack enemies or attack-move toward a location.' + (' RECOMMENDED: Visible enemies detected.' if has_visible_enemies else ''),
+        'positioning':'Move, regroup, scout, stop or hold position. Ordinary Move changes location only: moving near a resource does not harvest it, moving near a building does not repair or enter it, and ordinary Move does not attack along the route.' + (' NOTE: Consider combat instead of passive repositioning when enemies are visible.' if has_visible_enemies else ''),
         'other':'Use another available ability.',
         'individual':'Let separate Jev decisions choose orders for individual units.',
         'continue':'Keep the existing orders unchanged, whatever those orders currently are.',
@@ -694,11 +731,21 @@ async def decide(view, jev, memory):
         facts = state.get('selection_facts',{}).get(kind,{})
         if continue_would_idle(facts):
             offered.discard('continue')
+        nearby_enemies = facts.get('visible_enemies_within_12_of_any_member') or {}
+        idle_count = facts.get('idle_count', 0)
+        combat_note = ''
+        if nearby_enemies and idle_count > 0:
+            combat_note = (f' URGENT: {sum(nearby_enemies.values())} enemy units within 12 map units, '
+                         f'{idle_count} of your {len(cohorts[kind])} units are idle. '
+                         'Combat units should engage enemies, not reposition passively.')
+        elif has_visible_enemies and idle_count > 0:
+            combat_note = (f' NOTE: Enemies visible on the map, {idle_count} of your {len(cohorts[kind])} units are idle. '
+                         'Consider combat over passive positioning.')
         purpose_questions[f'purpose_{kind}'] = {
             'type':'choice',
             'instructions':f'Choose how the {len(cohorts[kind])} {kind} units should contribute to completing the mission now. '
                            'Different unit types can make different contributions to the same strategy. '
-                           'Use their capabilities, current orders, resources and threats.',
+                           'Use their capabilities, current orders, resources and threats.' + combat_note,
             'criteria':{p:meanings[p]+((' Available: '+'; '.join(state['selection_facts'][kind]['available_support_abilities'])) if p=='other' else '')
                         for p in sorted(offered)},
         }
@@ -844,12 +891,22 @@ async def decide_individual(view, jev, memory):
     candidates = {}
     for unit in batch:
         tag = str(unit['tag'])
-        options = {'continue': None}
-        actions = {'continue': None}
+        
+        # Check if unit is idle and has nearby enemies - if so, omit continue
+        is_idle = not unit.get('orders')
+        enemies = [e for e in unit.get('surroundings', []) if e['alliance'] == 'Enemy']
+        nearby_enemies = [e for e in enemies if e['distance'] <= 12]
+        omit_continue_individual = (is_idle and nearby_enemies)
+        
+        options = {}
+        actions = {}
+        if not omit_continue_individual:
+            options['continue'] = 'Keep existing orders unchanged.' + (' (Currently idle)' if is_idle else '')
+            actions['continue'] = None
+        
         for candidate in unit['candidates']:
             description = candidate['description']
             destination = candidate['command'].get('point')
-            enemies = [e for e in unit['surroundings'] if e['alliance'] == 'Enemy']
             if destination is not None and enemies:
                 dx = destination[0] - unit['position'][0]
                 dy = destination[1] - unit['position'][1]
@@ -857,6 +914,9 @@ async def decide_individual(view, jev, memory):
                 after = min(math.hypot(e['east_offset']-dx, e['north_offset']-dy) for e in enemies)
                 change = 'farther from' if after > before else 'closer to'
                 description += f'; destination is {change} the nearest visible enemy ({before:.1f} to {after:.1f} map units), assuming enemies stay still'
+                # Highlight combat actions
+                if candidate['id'].startswith('attack') and nearby_enemies:
+                    description = f'[COMBAT] {description}'
             options[candidate['id']] = description
             actions[candidate['id']] = candidate['command']
         candidates[tag] = actions

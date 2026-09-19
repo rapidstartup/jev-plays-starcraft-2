@@ -631,8 +631,11 @@ def test_continue_predicates_distinguish_idle_combat_from_existing_work():
     attacking={'count':10,'idle_count':0,'current_order_counts':{'Attack Attack':10}}
     threat={**idle,'visible_enemies_within_12_of_any_member':{'Zergling':4},
             'nearest_visible_enemy_distance':5}
+    visible={**idle,'nearest_visible_enemy_distance':24}
     assert player.continue_would_idle(idle,'combat')
     assert not player.continue_would_idle(idle,'positioning')
+    assert player.continue_would_idle(visible,'positioning')
+    assert not player.continue_would_idle(visible)
     assert not player.continue_would_idle(attacking,'combat')
     assert player.continue_would_idle(threat)
     assert player.continue_would_idle(threat,'continue')
@@ -657,6 +660,27 @@ def test_idle_combat_purpose_does_not_noop_via_continue():
             assert 'group_attack_move_east' in questions['Marine']['criteria']
             return {'Marine':{'choice':'group_attack_move_east'}}
     assert asyncio.run(player.decide({'loop':1,'self':units},Model(),{}))==[attack]
+    assert any(event=='continue_suppressed' for event,_ in logs)
+
+
+def test_idle_positioning_with_visible_enemies_does_not_noop_via_continue():
+    import player
+    move={'unit_tag':1,'ability_id':16,'point':[0,6]}
+    units=[{'tag':1,'type':'Marine','position':[0,0],'orders':[],
+            'candidates':[{'id':'north','description':'Move north','command':move}]}]
+    logs=[]
+    class Model:
+        def log(self,event,**fields): logs.append((event,fields))
+        async def ask(self,state,questions):
+            if 'strategy' in questions:
+                return {'strategy':{'choice':'explore'}}
+            if 'purpose_Marine' in questions:
+                return {'purpose_Marine':{'choice':'positioning'}}
+            assert 'continue' not in questions['Marine']['criteria']
+            assert 'group_north' in questions['Marine']['criteria']
+            return {'Marine':{'choice':'group_north'}}
+    view={'loop':1,'self':units,'visible_entities':[{'type':'Marine','alliance':'Enemy','position':[20,20]}]}
+    assert asyncio.run(player.decide(view,Model(),{}))==[move]
     assert any(event=='continue_suppressed' for event,_ in logs)
 
 
