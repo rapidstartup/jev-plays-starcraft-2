@@ -492,3 +492,336 @@ def test_combat_purpose_in_engagement_reissues_attack_despite_existing_queue():
     assert suppressed
     assert suppressed[0]['current_order_counts'] == {'Attack Attack': 1}
     assert suppressed[0]['purpose'] == 'combat'
+
+
+def _marine_with_stop_hold_and_attack(tag=1001, health_fraction=1.0, orders=None, extra_candidates=None):
+    attack = {'unit_tag': tag, 'ability_id': 3674, 'target_unit_tag': 1234}
+    stop = {'unit_tag': tag, 'ability_id': 4}
+    hold = {'unit_tag': tag, 'ability_id': 18}
+    north = {'unit_tag': tag, 'ability_id': 16, 'point': [3.0, 9.0]}
+    attack_move = {'unit_tag': tag, 'ability_id': 23, 'point': [9.0, 3.0]}
+    candidates = [
+        {'id': 'stop', 'description': 'Stop the current order; normal automatic targeting remains possible',
+         'command': stop},
+        {'id': 'hold_position', 'description': 'Hold position here instead of continuing the current movement order',
+         'command': hold},
+        {'id': 'north', 'description': 'Move north', 'command': north},
+        {'id': 'attack_1234', 'description': 'Attack visible Zergling tag 1234, distance 2.8',
+         'command': attack},
+        {'id': 'attack_move_east', 'description': 'Attack-move east', 'command': attack_move},
+    ]
+    if extra_candidates:
+        candidates.extend(extra_candidates)
+    unit = {
+        'tag': tag,
+        'type': 'Marine',
+        'position': [3.0, 3.0],
+        'health': 45 * health_fraction,
+        'health_fraction': health_fraction,
+        'build_progress': 1.0,
+        'orders': orders or [],
+        'candidates': candidates,
+    }
+    return unit, attack, stop, hold, north
+
+
+def test_positioning_omits_stop_and_hold_when_attack_available_in_engagement():
+    """Stop/Hold must not be choosable as positioning while Attack is also offered in engagement."""
+    unit, attack, stop, hold, north = _marine_with_stop_hold_and_attack()
+    view = {
+        'loop': 100,
+        'objective': 'Test objective',
+        'resources': {'minerals': 100, 'vespene': 0},
+        'explored_map': {'rows_north_to_south': ['...'], 'bounds': [0, 0, 10, 10]},
+        'visible_entities': [
+            {'type': 'Zergling', 'alliance': 'Enemy', 'position': [5.0, 5.0]}
+        ],
+        'last_known_entities': [],
+        'unit_type_facts': {'Marine': {'catalog_weapons': []}},
+        'self': [unit],
+    }
+    logs = []
+
+    class PositioningJev(MockJev):
+        def log(self, event, **fields):
+            logs.append((event, fields))
+
+        async def ask(self, state, questions):
+            self.calls.append({'state': state, 'questions': questions})
+            answers = {}
+            for key, question in questions.items():
+                criteria = question.get('criteria', {})
+                if key == 'purpose_Marine':
+                    answers[key] = {'choice': 'positioning', 'probabilities': {'positioning': 1.0}}
+                elif key == 'Marine':
+                    assert 'group_stop' not in criteria, f'Stop should be omitted in engagement. Got: {list(criteria)}'
+                    assert 'group_hold_position' not in criteria
+                    assert 'group_north' in criteria
+                    assert 'group_attack_1234' not in criteria
+                    answers[key] = {'choice': 'group_north', 'probabilities': {'group_north': 1.0}}
+                elif criteria:
+                    first_key = next(iter(criteria.keys()))
+                    answers[key] = {'choice': first_key, 'probabilities': {first_key: 1.0}}
+            return answers
+
+    commands = asyncio.run(decide(view, PositioningJev(), {}))
+    assert commands == [north]
+    omitted = [fields for event, fields in logs if event == 'stop_hold_suppressed']
+    assert omitted
+    assert set(omitted[0]['omitted']) >= {'group_stop', 'group_hold_position'}
+
+
+def test_combat_keeps_tagged_attack_and_omits_stop():
+    """group_attack_<tag> stays; Stop is not a combat implementation in engagement."""
+    unit, attack, stop, hold, north = _marine_with_stop_hold_and_attack()
+    view = {
+        'loop': 100,
+        'objective': 'Test objective',
+        'resources': {'minerals': 100, 'vespene': 0},
+        'explored_map': {'rows_north_to_south': ['...'], 'bounds': [0, 0, 10, 10]},
+        'visible_entities': [
+            {'type': 'Zergling', 'alliance': 'Enemy', 'position': [5.0, 5.0]}
+        ],
+        'last_known_entities': [],
+        'unit_type_facts': {'Marine': {'catalog_weapons': []}},
+        'self': [unit],
+    }
+
+    class CombatJev(MockJev):
+        async def ask(self, state, questions):
+            self.calls.append({'state': state, 'questions': questions})
+            answers = {}
+            for key, question in questions.items():
+                criteria = question.get('criteria', {})
+                if key == 'purpose_Marine':
+                    answers[key] = {'choice': 'combat', 'probabilities': {'combat': 1.0}}
+                elif key == 'Marine':
+                    assert 'group_attack_1234' in criteria
+                    assert 'group_attack_move_east' in criteria
+                    assert 'group_stop' not in criteria
+                    assert 'group_hold_position' not in criteria
+                    answers[key] = {'choice': 'group_attack_1234', 'probabilities': {'group_attack_1234': 1.0}}
+                elif criteria:
+                    first_key = next(iter(criteria.keys()))
+                    answers[key] = {'choice': first_key, 'probabilities': {first_key: 1.0}}
+            return answers
+
+    commands = asyncio.run(decide(view, CombatJev(), {}))
+    assert commands == [attack]
+
+
+def test_stop_and_hold_remain_when_not_in_engagement():
+    """Out of engagement, Stop/Hold stay available as positioning."""
+    unit, attack, stop, hold, north = _marine_with_stop_hold_and_attack()
+    view = {
+        'loop': 100,
+        'objective': 'Test objective',
+        'resources': {'minerals': 100, 'vespene': 0},
+        'explored_map': {'rows_north_to_south': ['...'], 'bounds': [0, 0, 10, 10]},
+        'visible_entities': [],
+        'last_known_entities': [],
+        'unit_type_facts': {'Marine': {'catalog_weapons': []}},
+        'self': [unit],
+    }
+
+    class PositioningJev(MockJev):
+        async def ask(self, state, questions):
+            self.calls.append({'state': state, 'questions': questions})
+            answers = {}
+            for key, question in questions.items():
+                criteria = question.get('criteria', {})
+                if key == 'purpose_Marine':
+                    answers[key] = {'choice': 'positioning', 'probabilities': {'positioning': 1.0}}
+                elif key == 'Marine':
+                    assert 'group_stop' in criteria
+                    assert 'group_hold_position' in criteria
+                    answers[key] = {'choice': 'group_stop', 'probabilities': {'group_stop': 1.0}}
+                elif criteria:
+                    first_key = next(iter(criteria.keys()))
+                    answers[key] = {'choice': first_key, 'probabilities': {first_key: 1.0}}
+            return answers
+
+    commands = asyncio.run(decide(view, PositioningJev(), {}))
+    assert commands == [stop]
+
+
+def test_stop_remains_in_engagement_when_no_attack_is_offered():
+    """Only omit Stop/Hold when Attack is also on the menu."""
+    unit, attack, stop, hold, north = _marine_with_stop_hold_and_attack()
+    unit['candidates'] = [c for c in unit['candidates'] if 'attack' not in c['id']]
+    view = {
+        'loop': 100,
+        'objective': 'Test objective',
+        'resources': {'minerals': 100, 'vespene': 0},
+        'explored_map': {'rows_north_to_south': ['...'], 'bounds': [0, 0, 10, 10]},
+        'visible_entities': [
+            {'type': 'Zergling', 'alliance': 'Enemy', 'position': [5.0, 5.0]}
+        ],
+        'last_known_entities': [],
+        'unit_type_facts': {'Marine': {'catalog_weapons': []}},
+        'self': [unit],
+    }
+
+    class PositioningJev(MockJev):
+        async def ask(self, state, questions):
+            self.calls.append({'state': state, 'questions': questions})
+            answers = {}
+            for key, question in questions.items():
+                criteria = question.get('criteria', {})
+                if key == 'purpose_Marine':
+                    assert 'combat' not in criteria
+                    answers[key] = {'choice': 'positioning', 'probabilities': {'positioning': 1.0}}
+                elif key == 'Marine':
+                    assert 'group_stop' in criteria
+                    assert 'group_hold_position' in criteria
+                    answers[key] = {'choice': 'group_stop', 'probabilities': {'group_stop': 1.0}}
+                elif criteria:
+                    first_key = next(iter(criteria.keys()))
+                    answers[key] = {'choice': first_key, 'probabilities': {first_key: 1.0}}
+            return answers
+
+    commands = asyncio.run(decide(view, PositioningJev(), {}))
+    assert commands == [stop]
+
+
+def test_damaged_units_omit_stop_without_visible_enemies():
+    """Damaged selections are in engagement; Stop is omitted if Attack-Move is offered."""
+    unit, attack, stop, hold, north = _marine_with_stop_hold_and_attack(health_fraction=0.4)
+    view = {
+        'loop': 100,
+        'objective': 'Test objective',
+        'resources': {'minerals': 100, 'vespene': 0},
+        'explored_map': {'rows_north_to_south': ['...'], 'bounds': [0, 0, 10, 10]},
+        'visible_entities': [],
+        'last_known_entities': [],
+        'unit_type_facts': {'Marine': {'catalog_weapons': []}},
+        'self': [unit],
+    }
+
+    class CombatJev(MockJev):
+        async def ask(self, state, questions):
+            self.calls.append({'state': state, 'questions': questions})
+            answers = {}
+            for key, question in questions.items():
+                criteria = question.get('criteria', {})
+                if key == 'purpose_Marine':
+                    positioning = criteria.get('positioning', '')
+                    assert 'Stop and Hold Position are omitted' in positioning
+                    answers[key] = {'choice': 'combat', 'probabilities': {'combat': 1.0}}
+                elif key == 'Marine':
+                    assert 'group_stop' not in criteria
+                    assert 'group_hold_position' not in criteria
+                    assert 'group_attack_move_east' in criteria
+                    answers[key] = {'choice': 'group_attack_move_east',
+                                    'probabilities': {'group_attack_move_east': 1.0}}
+                elif criteria:
+                    first_key = next(iter(criteria.keys()))
+                    answers[key] = {'choice': first_key, 'probabilities': {first_key: 1.0}}
+            return answers
+
+    commands = asyncio.run(decide(view, CombatJev(), {}))
+    assert commands == [{'unit_tag': 1001, 'ability_id': 23, 'point': [9.0, 3.0]}]
+
+
+def test_join_still_offered_when_hold_is_omitted_in_engagement():
+    """Regroup uses Hold internally but is not itself Hold Position."""
+    enemy = {'type': 'Zergling', 'alliance': 'Enemy', 'position': [5.0, 5.0]}
+    units = []
+    for tag, other in [(1, 2), (2, 1)]:
+        units.append({
+            'tag': tag,
+            'type': 'Marine',
+            'position': [float(tag), 0.0],
+            'health': 45,
+            'health_fraction': 1.0,
+            'build_progress': 1.0,
+            'orders': [],
+            'candidates': [
+                {'id': 'stop', 'description': 'Stop',
+                 'command': {'unit_tag': tag, 'ability_id': 4}},
+                {'id': 'hold_position', 'description': 'Hold position',
+                 'command': {'unit_tag': tag, 'ability_id': 18}},
+                {'id': f'join_{other}', 'description': f'Join {other}',
+                 'command': {'unit_tag': tag, 'ability_id': 16, 'point': [float(other), 0.0]}},
+                {'id': 'attack_1234', 'description': 'Attack target 1234',
+                 'command': {'unit_tag': tag, 'ability_id': 3674, 'target_unit_tag': 1234}},
+            ],
+        })
+    view = {
+        'loop': 1,
+        'objective': 'Test',
+        'resources': {},
+        'visible_entities': [enemy],
+        'self': units,
+    }
+
+    class JoinJev(MockJev):
+        async def ask(self, state, questions):
+            self.calls.append({'state': state, 'questions': questions})
+            answers = {}
+            for key, question in questions.items():
+                criteria = question.get('criteria', {})
+                if key == 'purpose_Marine':
+                    answers[key] = {'choice': 'positioning', 'probabilities': {'positioning': 1.0}}
+                elif key == 'Marine':
+                    assert 'group_join_1' in criteria
+                    assert 'group_stop' not in criteria
+                    assert 'group_hold_position' not in criteria
+                    answers[key] = {'choice': 'group_join_1', 'probabilities': {'group_join_1': 1.0}}
+                elif criteria:
+                    first_key = next(iter(criteria.keys()))
+                    answers[key] = {'choice': first_key, 'probabilities': {first_key: 1.0}}
+            return answers
+
+    commands = asyncio.run(decide(view, JoinJev(), {}))
+    assert commands == [{'unit_tag': 1, 'ability_id': 18},
+                        {'unit_tag': 2, 'ability_id': 16, 'point': [1.0, 0.0]}]
+
+
+def test_individual_omits_stop_and_hold_when_attack_and_enemies():
+    """Individual menus drop Stop/Hold the same way group menus do."""
+    unit, attack, stop, hold, north = _marine_with_stop_hold_and_attack()
+    unit['surroundings'] = [
+        {'tag': 1234, 'type': 'Zergling', 'alliance': 'Enemy', 'distance': 2.8,
+         'east_offset': 2.0, 'north_offset': 2.0}
+    ]
+    view = {
+        'loop': 100,
+        'objective': 'Test objective',
+        'resources': {'minerals': 100, 'vespene': 0},
+        'explored_map': {'rows_north_to_south': ['...'], 'bounds': [0, 0, 10, 10]},
+        'visible_entities': [
+            {'type': 'Zergling', 'alliance': 'Enemy', 'position': [5.0, 5.0]}
+        ],
+        'last_known_entities': [],
+        'unit_type_facts': {'Marine': {'catalog_weapons': []}},
+        'self': [unit],
+    }
+    logs = []
+
+    class IndividualJev(MockJev):
+        def log(self, event, **fields):
+            logs.append((event, fields))
+
+        async def ask(self, state, questions):
+            self.calls.append({'state': state, 'questions': questions})
+            answers = {}
+            for key, question in questions.items():
+                criteria = question.get('criteria', {})
+                if key == 'purpose_Marine':
+                    answers[key] = {'choice': 'individual', 'probabilities': {'individual': 1.0}}
+                elif key == '1001':
+                    assert 'stop' not in criteria
+                    assert 'hold_position' not in criteria
+                    assert 'attack_1234' in criteria
+                    answers[key] = {'choice': 'attack_1234', 'probabilities': {'attack_1234': 1.0}}
+                elif criteria:
+                    first_key = next(iter(criteria.keys()))
+                    answers[key] = {'choice': first_key, 'probabilities': {first_key: 1.0}}
+            return answers
+
+    commands = asyncio.run(decide(view, IndividualJev(), {}))
+    assert commands == [attack]
+    omitted = [fields for event, fields in logs if event == 'stop_hold_suppressed']
+    assert any('stop' in fields.get('omitted', []) or 'group_stop' in fields.get('omitted', [])
+               for fields in omitted)

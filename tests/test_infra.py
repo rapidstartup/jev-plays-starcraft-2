@@ -664,6 +664,19 @@ def test_continue_predicates_distinguish_idle_combat_from_existing_work():
     assert not player.current_orders_are_useful(moving_visible,'positioning')
     assert player.current_orders_are_useful(attacking_visible,'positioning')
     assert player.current_orders_are_useful(attacking_visible,'combat')
+    assert player.is_stop_or_hold_option('group_stop')
+    assert player.is_stop_or_hold_option('hold_position')
+    assert not player.is_stop_or_hold_option('group_join_1')
+    assert not player.is_stop_or_hold_option('group_north')
+    assert player.is_attack_option('group_attack_1234')
+    assert player.is_attack_option('group_attack_move_east')
+    assert not player.is_attack_option('group_stop')
+    available={'group_stop':'Stop','group_attack_1234':'Attack','group_north':'Move'}
+    assert player.suppress_stop_hold(attacking_visible, available)
+    assert player.suppress_stop_hold(damaged_moving, available)
+    assert not player.suppress_stop_hold(idle, available)
+    assert not player.suppress_stop_hold(attacking_visible, {'group_stop':'Stop','group_north':'Move'})
+    assert player.without_stop_hold(available) == {'group_attack_1234':'Attack','group_north':'Move'}
 
 
 def test_idle_combat_purpose_does_not_noop_via_continue():
