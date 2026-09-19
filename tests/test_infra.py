@@ -642,6 +642,8 @@ def test_continue_predicates_distinguish_idle_combat_from_existing_work():
                        'visible_enemies_within_12_of_any_member':{'Zergling':4}}
     damaged_moving={**moving,'damaged_count':3,'lowest_health_percent':40}
     shrinking_moving={**moving,'count_change_since_previous_decision':-2}
+    shrinking_attacking={**attacking,'count_change_since_previous_decision':-2}
+    damaged_attacking={**attacking,'damaged_count':3}
     assert player.continue_would_idle(idle,'combat')
     assert not player.continue_would_idle(idle,'positioning')
     assert player.continue_would_idle(visible,'positioning')
@@ -653,10 +655,12 @@ def test_continue_predicates_distinguish_idle_combat_from_existing_work():
     assert player.continue_would_idle(moving_threat,'positioning')
     assert player.continue_would_idle(moving_threat,'combat')
     assert player.continue_would_idle(stopping_visible,'positioning')
-    assert not player.continue_would_idle(attacking_visible,'combat')
-    assert not player.continue_would_idle(attacking_visible,'positioning')
+    assert player.continue_would_idle(attacking_visible,'combat')
+    assert player.continue_would_idle(attacking_visible,'positioning')
     assert player.continue_would_idle(damaged_moving,'positioning')
     assert player.continue_would_idle(shrinking_moving,'positioning')
+    assert player.continue_would_idle(shrinking_attacking,'combat')
+    assert player.continue_would_idle(damaged_attacking,'combat')
     assert not player.current_orders_are_useful(moving_visible,'positioning')
     assert player.current_orders_are_useful(attacking_visible,'positioning')
     assert player.current_orders_are_useful(attacking_visible,'combat')
@@ -729,8 +733,9 @@ def test_continue_remains_available_when_combat_orders_already_exist():
     attack={'unit_tag':1,'ability_id':23,'point':[8,0]}
     units=[{'tag':1,'type':'Marine','position':[0,0],'orders':[{'ability':'Attack Attack'}],
             'candidates':[{'id':'attack_move_east','description':'Attack-move east','command':attack}]}]
+    logs=[]
     class Model:
-        def log(self,*args,**kwargs): pass
+        def log(self,event,**fields): logs.append((event,fields))
         async def ask(self,state,questions):
             if 'strategy' in questions:
                 return {'strategy':{'choice':'attack'}}
@@ -739,6 +744,33 @@ def test_continue_remains_available_when_combat_orders_already_exist():
             assert 'continue' in questions['Marine']['criteria']
             return {'Marine':{'choice':'continue'}}
     assert asyncio.run(player.decide({'loop':1,'self':units},Model(),{}))==[]
+    allowed=[fields for event,fields in logs if event=='continue_allowed']
+    assert allowed
+    assert allowed[0]['current_order_counts']=={'Attack Attack':1}
+    assert not any(event=='continue_suppressed' for event,_ in logs)
+
+
+def test_engagement_attack_orders_suppress_continue_for_combat():
+    import player
+    attack={'unit_tag':1,'ability_id':23,'point':[8,0]}
+    units=[{'tag':1,'type':'Marine','position':[0,0],'orders':[{'ability':'Attack Attack'}],
+            'candidates':[{'id':'attack_move_east','description':'Attack-move east','command':attack}]}]
+    logs=[]
+    class Model:
+        def log(self,event,**fields): logs.append((event,fields))
+        async def ask(self,state,questions):
+            if 'strategy' in questions:
+                return {'strategy':{'choice':'attack'}}
+            if 'purpose_Marine' in questions:
+                return {'purpose_Marine':{'choice':'combat'}}
+            assert 'continue' not in questions['Marine']['criteria']
+            return {'Marine':{'choice':'group_attack_move_east'}}
+    view={'loop':1,'self':units,'visible_entities':[{'type':'Zergling','alliance':'Enemy','position':[5,0]}]}
+    assert asyncio.run(player.decide(view,Model(),{}))==[attack]
+    suppressed=[fields for event,fields in logs if event=='continue_suppressed']
+    assert suppressed
+    assert suppressed[0]['current_order_counts']=={'Attack Attack':1}
+    assert suppressed[0]['purpose']=='combat'
 
 
 def test_positioning_move_orders_with_visible_enemies_suppress_continue():

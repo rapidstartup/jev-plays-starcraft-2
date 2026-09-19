@@ -76,8 +76,8 @@ def test_continue_omitted_when_idle_units_face_nearby_threats():
     assert 'continue' not in criteria_keys, "Continue should be omitted when idle units face nearby threats"
 
 
-def test_continue_offered_when_units_have_orders():
-    """Continue should be offered when units already have Attack orders, even with nearby enemies."""
+def test_continue_suppressed_when_attack_orders_in_engagement():
+    """Engagement plus Attack queues still suppress continue for combat/positioning."""
     view = {
         'loop': 100,
         'objective': 'Test objective',
@@ -96,7 +96,7 @@ def test_continue_offered_when_units_have_orders():
                 'health': 45,
                 'health_fraction': 1.0,
                 'build_progress': 1.0,
-                'orders': [{'ability': 'Attack'}],  # Has orders
+                'orders': [{'ability': 'Attack'}],
                 'candidates': [
                     {'id': 'attack_1234', 'description': 'Attack target 1234',
                      'command': {'unit_tag': 1001, 'ability_id': 3674, 'target_unit_tag': 1234}},
@@ -110,21 +110,18 @@ def test_continue_offered_when_units_have_orders():
     
     commands = asyncio.run(decide(view, jev, memory))
     
-    # Check that a question was asked
     assert len(jev.calls) > 0
     
-    # Find the Marine selection question
     marine_question = None
     for call in jev.calls:
         for key, question in call['questions'].items():
-            if 'Marine' in key or any('Marine' in str(c) for c in question.get('criteria', {}).values()):
+            if key == 'Marine':
                 marine_question = question
                 break
     
-    # Continue SHOULD be in the criteria when units already have orders
-    assert marine_question is not None, "Should have a Marine-related question"
+    assert marine_question is not None, "Should have a Marine order question"
     criteria_keys = list(marine_question['criteria'].keys())
-    assert 'continue' in criteria_keys, "Continue should be offered when units have existing orders"
+    assert 'continue' not in criteria_keys, "Continue should be suppressed in engagement even with Attack orders"
 
 
 def test_continue_offered_when_no_visible_enemies():
@@ -382,7 +379,64 @@ def test_positioning_with_only_move_orders_omits_continue_when_enemies_visible()
 
 
 def test_continue_allowed_when_attack_orders_are_already_useful():
-    """Useful Attack queues still offer continue under visible enemies."""
+    """Out of engagement, Attack queues may still offer continue."""
+    view = {
+        'loop': 100,
+        'objective': 'Test objective',
+        'resources': {'minerals': 100, 'vespene': 0},
+        'explored_map': {'rows_north_to_south': ['...'], 'bounds': [0, 0, 10, 10]},
+        'visible_entities': [],
+        'last_known_entities': [],
+        'unit_type_facts': {'Marine': {'catalog_weapons': []}},
+        'self': [
+            {
+                'tag': 1001,
+                'type': 'Marine',
+                'position': [3.0, 3.0],
+                'health': 45,
+                'health_fraction': 1.0,
+                'build_progress': 1.0,
+                'orders': [{'ability': 'Attack Attack'}],
+                'candidates': [
+                    {'id': 'attack_1234', 'description': 'Attack target 1234',
+                     'command': {'unit_tag': 1001, 'ability_id': 3674, 'target_unit_tag': 1234}},
+                ]
+            }
+        ]
+    }
+
+    logs = []
+
+    class CombatContinueJev(MockJev):
+        def log(self, event, **fields):
+            logs.append((event, fields))
+
+        async def ask(self, state, questions):
+            self.calls.append({'state': state, 'questions': questions})
+            answers = {}
+            for key, question in questions.items():
+                criteria = question.get('criteria', {})
+                if key == 'purpose_Marine':
+                    answers[key] = {'choice': 'combat', 'probabilities': {'combat': 1.0}}
+                elif key == 'Marine':
+                    assert 'continue' in criteria
+                    answers[key] = {'choice': 'continue', 'probabilities': {'continue': 1.0}}
+                elif criteria:
+                    first_key = next(iter(criteria.keys()))
+                    answers[key] = {'choice': first_key, 'probabilities': {first_key: 1.0}}
+            return answers
+
+    jev = CombatContinueJev()
+    commands = asyncio.run(decide(view, jev, {}))
+    assert commands == []
+    allowed = [fields for event, fields in logs if event == 'continue_allowed']
+    assert allowed
+    assert allowed[0]['current_order_counts'] == {'Attack Attack': 1}
+
+
+def test_combat_purpose_in_engagement_reissues_attack_despite_existing_queue():
+    """Combat purpose in engagement suppresses continue even when Attack is already queued."""
+    attack = {'unit_tag': 1001, 'ability_id': 3674, 'target_unit_tag': 1234}
     view = {
         'loop': 100,
         'objective': 'Test objective',
@@ -404,13 +458,18 @@ def test_continue_allowed_when_attack_orders_are_already_useful():
                 'orders': [{'ability': 'Attack Attack'}],
                 'candidates': [
                     {'id': 'attack_1234', 'description': 'Attack target 1234',
-                     'command': {'unit_tag': 1001, 'ability_id': 3674, 'target_unit_tag': 1234}},
+                     'command': attack},
                 ]
             }
         ]
     }
 
-    class CombatContinueJev(MockJev):
+    logs = []
+
+    class CombatReissueJev(MockJev):
+        def log(self, event, **fields):
+            logs.append((event, fields))
+
         async def ask(self, state, questions):
             self.calls.append({'state': state, 'questions': questions})
             answers = {}
@@ -419,13 +478,17 @@ def test_continue_allowed_when_attack_orders_are_already_useful():
                 if key == 'purpose_Marine':
                     answers[key] = {'choice': 'combat', 'probabilities': {'combat': 1.0}}
                 elif key == 'Marine':
-                    assert 'continue' in criteria
-                    answers[key] = {'choice': 'continue', 'probabilities': {'continue': 1.0}}
+                    assert 'continue' not in criteria
+                    answers[key] = {'choice': 'group_attack_1234', 'probabilities': {'group_attack_1234': 1.0}}
                 elif criteria:
                     first_key = next(iter(criteria.keys()))
                     answers[key] = {'choice': first_key, 'probabilities': {first_key: 1.0}}
             return answers
 
-    jev = CombatContinueJev()
+    jev = CombatReissueJev()
     commands = asyncio.run(decide(view, jev, {}))
-    assert commands == []
+    assert commands == [attack]
+    suppressed = [fields for event, fields in logs if event == 'continue_suppressed']
+    assert suppressed
+    assert suppressed[0]['current_order_counts'] == {'Attack Attack': 1}
+    assert suppressed[0]['purpose'] == 'combat'

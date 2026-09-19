@@ -385,9 +385,9 @@ def selection_under_threat(facts):
 def continue_would_idle(facts, purpose=None):
     """Continue emits no commands. That is a no-op when idle units need work."""
     visible = enemies_are_visible(facts)
-    # Positioning or combat plus visible/damaged engagement and no Attack queue
-    # is a continue no-op; Move/Stop must not count as useful fighting work.
-    if purpose in ('positioning', 'combat') and selection_in_engagement(facts) and not current_orders_include_attack(facts):
+    # Combat/positioning in engagement always re-issues Attack/Attack-Move.
+    # Stale or wrong Attack queues must not keep continue as a no-op.
+    if purpose in ('positioning', 'combat') and selection_in_engagement(facts):
         return True
     if current_orders_are_useful(facts, purpose):
         return False
@@ -789,6 +789,8 @@ async def decide(view, jev, memory):
             if role == 'individual':
                 answers[kind]={'choice':role}
             elif role == 'continue' and not continue_would_idle(facts, role):
+                jev.log('continue_allowed',loop=view['loop'],cohort=kind,purpose=role,
+                        idle_count=facts.get('idle_count'),current_order_counts=facts.get('current_order_counts'))
                 answers[kind]={'choice':role}
             elif role == 'continue':
                 criteria={k:v for k,v in q['criteria'].items() if k != 'continue'}
@@ -804,6 +806,8 @@ async def decide(view, jev, memory):
                         jev.log('continue_suppressed',loop=view['loop'],cohort=kind,purpose=role,
                                 idle_count=facts.get('idle_count'),current_order_counts=facts.get('current_order_counts'))
                     else:
+                        jev.log('continue_allowed',loop=view['loop'],cohort=kind,purpose=role,
+                                idle_count=facts.get('idle_count'),current_order_counts=facts.get('current_order_counts'))
                         criteria['continue']=('Keep current orders without reissuing them. If they already implement the chosen contribution, this maintains that work.'
                                               + (' Prefer this when the current queue is Attack or Attack-Move; do not keep Move or Stop instead of fighting visible enemies.' if has_visible_enemies else ''))
                     concrete_questions[kind]={**q,'criteria':criteria,
