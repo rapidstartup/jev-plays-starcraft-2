@@ -45,8 +45,21 @@ def launch(root, port, logfile, window_size=(1280, 800), window_position=None):
             '-windowheight', str(window_size[1])]
     if window_position is not None:
         args += ['-windowx', str(window_position[0]), '-windowy', str(window_position[1])]
+    
+    env = None
+    if os.name == 'nt':
+        root_path = Path(root).expanduser().resolve()
+        support_dirs = []
+        for dirname in ('Support64', 'Support'):
+            support_path = root_path / dirname
+            if support_path.is_dir():
+                support_dirs.append(str(support_path))
+        if support_dirs:
+            env = os.environ.copy()
+            env['PATH'] = os.pathsep.join(support_dirs) + os.pathsep + env.get('PATH', '')
+    
     return subprocess.Popen(args,
-                            cwd=str(Path(root).expanduser()), stdout=logfile, stderr=logfile)
+                            cwd=str(Path(root).expanduser()), stdout=logfile, stderr=logfile, env=env)
 
 
 class SC2:
