@@ -371,13 +371,18 @@ def is_stop_or_hold_option(key):
 
 
 def is_plain_move_option(key):
-    """Ordinary Move and compass Move. Attack-Move and join/regroup are not plain Move."""
+    """Ordinary Move and compass Move. Attack-Move is not plain Move."""
     action = option_id(key)
-    if is_attack_option(key) or action.startswith('join_'):
+    if is_attack_option(key) or is_join_option(key):
         return False
     if action in ('north', 'south', 'east', 'west'):
         return True
     return action.startswith(('move_', 'last_known_move_', 'map_move_'))
+
+
+def is_join_option(key):
+    """Regroup/join issues ordinary Move for followers — suppress in engagement like plain Move."""
+    return option_id(key).startswith('join_')
 
 
 def suppress_stop_hold(facts, available):
@@ -766,6 +771,11 @@ async def decide(view, jev, memory):
                 for k in omitted:
                     criteria.pop(k)
                 jev.log('move_suppressed',loop=view['loop'],cohort=kind,omitted=omitted)
+            join_omitted = [k for k in criteria if is_join_option(k)]
+            if join_omitted:
+                for k in join_omitted:
+                    criteria.pop(k)
+                jev.log('join_suppressed',loop=view['loop'],cohort=kind,omitted=join_omitted)
         # Add combat-specific guidance when threats are nearby
         combat_guidance = ''
         if has_nearby_threats:
@@ -774,7 +784,7 @@ async def decide(view, jev, memory):
                              f'Idle units: {idle_count}/{len(selected)}. '
                              'Prioritize engagement over inaction when units are idle and enemies are close. '
                              'Prefer Attack or Attack-Move over Move or Stop; ordinary Move and Stop do not fight. '
-                             'Stop, Hold Position, and ordinary Move are omitted while Attack is available.')
+                             'Stop, Hold Position, ordinary Move, and Join/regroup are omitted while Attack is available.')
         
         questions[kind] = {
             'type':'choice',

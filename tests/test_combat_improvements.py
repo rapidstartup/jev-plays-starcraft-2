@@ -994,3 +994,34 @@ def test_individual_omits_point_move_keeps_attack_move():
     assert {'north', 'map_move_south_west'} <= omitted
     assert 'attack_move_east' not in omitted
     assert 'attack_1234' not in omitted
+
+
+def test_join_option_detected():
+    from player import is_join_option, is_plain_move_option
+    assert is_join_option('group_join_123')
+    assert is_join_option('join_123')
+    assert not is_plain_move_option('group_join_123')
+
+
+def test_join_stripped_when_plain_move_suppressed(monkeypatch):
+    """Engagement + Attack on menu must drop join_* the same as compass Move."""
+    from player import is_join_option, is_plain_move_option, suppress_plain_move, without_plain_move
+    facts = {
+        'nearest_visible_enemy_distance': 5.0,
+        'visible_enemies_within_12_of_any_member': {'Zergling': 3},
+        'damaged_count': 1,
+        'count_change_since_previous_decision': 0,
+        'current_order_counts': {},
+        'idle_count': 0,
+        'count': 10,
+    }
+    available = {
+        'group_attack_1': 'attack',
+        'group_north': 'move north',
+        'group_join_99': 'regroup',
+    }
+    assert suppress_plain_move(facts, available)
+    kept = {k: v for k, v in available.items() if not is_plain_move_option(k) and not is_join_option(k)}
+    assert 'group_attack_1' in kept
+    assert 'group_north' not in kept
+    assert 'group_join_99' not in kept
