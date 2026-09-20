@@ -575,22 +575,23 @@ def test_positioning_omits_stop_and_hold_when_attack_available_in_engagement():
             for key, question in questions.items():
                 criteria = question.get('criteria', {})
                 if key == 'purpose_Marine':
-                    answers[key] = {'choice': 'positioning', 'probabilities': {'positioning': 1.0}}
+                    assert 'positioning' not in criteria, f'positioning should be dropped in engagement: {list(criteria)}'
+                    answers[key] = {'choice': 'combat', 'probabilities': {'combat': 1.0}}
                 elif key == 'Marine':
                     assert 'group_stop' not in criteria, f'Stop should be omitted in engagement. Got: {list(criteria)}'
                     assert 'group_hold_position' not in criteria
                     assert 'group_north' not in criteria
-                    assert 'group_join_1' in criteria
-                    assert 'group_attack_1234' not in criteria
-                    answers[key] = {'choice': 'group_join_1', 'probabilities': {'group_join_1': 1.0}}
+                    assert 'group_join_1' not in criteria
+                    assert 'group_attack_1234' in criteria
+                    answers[key] = {'choice': 'group_attack_1234', 'probabilities': {'group_attack_1234': 1.0}}
                 elif criteria:
                     first_key = next(iter(criteria.keys()))
                     answers[key] = {'choice': first_key, 'probabilities': {first_key: 1.0}}
             return answers
 
     commands = asyncio.run(decide(view, PositioningJev(), {}))
-    assert commands == [{'unit_tag': 1, 'ability_id': 18},
-                        {'unit_tag': 2, 'ability_id': 16, 'point': [1.0, 0.0]}]
+    assert all(c.get('ability_id') == 3674 for c in commands)
+    assert len(commands) == 2
     omitted = [fields for event, fields in logs if event == 'stop_hold_suppressed']
     assert omitted
     assert set(omitted[0]['omitted']) >= {'group_stop', 'group_hold_position'}
@@ -754,7 +755,7 @@ def test_damaged_units_omit_stop_without_visible_enemies():
     assert commands == [{'unit_tag': 1001, 'ability_id': 23, 'point': [9.0, 3.0]}]
 
 
-def test_join_still_offered_when_hold_is_omitted_in_engagement():
+def test_join_omitted_in_engagement_when_attack_available():
     """Regroup uses Hold internally but is not itself Hold Position."""
     enemy = {'type': 'Zergling', 'alliance': 'Enemy', 'position': [5.0, 5.0]}
     units = []
@@ -795,21 +796,23 @@ def test_join_still_offered_when_hold_is_omitted_in_engagement():
             for key, question in questions.items():
                 criteria = question.get('criteria', {})
                 if key == 'purpose_Marine':
-                    answers[key] = {'choice': 'positioning', 'probabilities': {'positioning': 1.0}}
+                    assert 'positioning' not in criteria
+                    answers[key] = {'choice': 'combat', 'probabilities': {'combat': 1.0}}
                 elif key == 'Marine':
-                    assert 'group_join_1' in criteria
+                    assert 'group_join_1' not in criteria
                     assert 'group_stop' not in criteria
                     assert 'group_hold_position' not in criteria
                     assert 'group_north' not in criteria
-                    answers[key] = {'choice': 'group_join_1', 'probabilities': {'group_join_1': 1.0}}
+                    assert 'group_attack_1234' in criteria
+                    answers[key] = {'choice': 'group_attack_1234', 'probabilities': {'group_attack_1234': 1.0}}
                 elif criteria:
                     first_key = next(iter(criteria.keys()))
                     answers[key] = {'choice': first_key, 'probabilities': {first_key: 1.0}}
             return answers
 
     commands = asyncio.run(decide(view, JoinJev(), {}))
-    assert commands == [{'unit_tag': 1, 'ability_id': 18},
-                        {'unit_tag': 2, 'ability_id': 16, 'point': [1.0, 0.0]}]
+    assert all(c.get('ability_id') == 3674 for c in commands)
+    assert len(commands) == 2
 
 
 def test_individual_omits_stop_and_hold_when_attack_and_enemies():

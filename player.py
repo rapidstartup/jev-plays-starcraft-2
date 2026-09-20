@@ -833,6 +833,10 @@ async def decide(view, jev, memory):
         facts = state.get('selection_facts',{}).get(kind,{})
         if continue_would_idle(facts) or continue_would_idle(facts, 'positioning'):
             offered.discard('continue')
+        # Join/Move are stripped in engagement when Attack exists; positioning would then
+        # have no concrete orders — drop positioning so Jev must pick combat.
+        if selection_in_engagement(facts) and any(is_attack_option(k) for k in q['criteria']):
+            offered.discard('positioning')
         nearby_enemies = facts.get('visible_enemies_within_12_of_any_member') or {}
         idle_count = facts.get('idle_count', 0)
         combat_note = ''
