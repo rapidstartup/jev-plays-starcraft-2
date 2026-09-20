@@ -284,9 +284,36 @@ async def run(args):
         log('finished',calls=jev.calls,cost=jev.cost,run=str(directory))
         return outcome
     finally:
-        await client.ws.close()
+        # Non-attach runs launched SC2 for this process. Leave + quit so the next
+        # batch cold-start can bind the listen port. --attach keeps SC2 alive for
+        # interactive resume unless --close-sc2 is set.
+        close_sc2 = proc is not None or getattr(args, 'close_sc2', False)
+        if close_sc2:
+            try:
+                if client.status in (sc.in_game, sc.init_game):
+                    await client.request('leave_game', sc.RequestLeaveGame())
+            except Exception as exc:
+                log('leave_game_error', error=str(exc)[:200])
+            try:
+                await client.request('quit', sc.RequestQuit())
+            except Exception as exc:
+                log('quit_error', error=str(exc)[:200])
+        try:
+            await client.ws.close()
+        except Exception:
+            pass
+        if proc is not None:
+            try:
+                proc.wait(timeout=25)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
         events.close()
-        # Keep SC2 alive: --attach can resume after harness edits or a budget stop.
+        if not close_sc2:
+            # Keep SC2 alive: --attach can resume after harness edits or a budget stop.
+            pass
 
 
 def main():
@@ -307,6 +334,7 @@ def main():
                         help='Discard decisions older than this many game loops; the 3s Jev wait can extend the cutoff so a finished-in-time call is not dropped')
     parser.add_argument('--objective',default='Keep your units alive and defeat visible enemy units.')
     parser.add_argument('--doctor',action='store_true')
+    parser.add_argument('--close-sc2',action='store_true',help='After --attach run, leave_game+quit so the next cold start can bind :5001')
     args=parser.parse_args()
     try:
         asyncio.run(run(args))
