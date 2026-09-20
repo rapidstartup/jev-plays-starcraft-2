@@ -364,10 +364,12 @@ def test_positioning_with_only_move_orders_omits_continue_when_enemies_visible()
                 if key == 'purpose_Marine':
                     assert 'continue' not in criteria
                     assert 'Attack or Attack-Move' in criteria.get('combat', '')
-                    answers[key] = {'choice': 'positioning', 'probabilities': {'positioning': 1.0}}
+                    answers[key] = {'choice': 'combat', 'probabilities': {'combat': 1.0}}
                 elif key == 'Marine':
                     assert 'continue' not in criteria
-                    answers[key] = {'choice': 'group_north', 'probabilities': {'group_north': 1.0}}
+                    assert 'group_north' not in criteria
+                    answers[key] = {'choice': 'group_attack_move_east',
+                                    'probabilities': {'group_attack_move_east': 1.0}}
                 elif criteria:
                     first_key = next(iter(criteria.keys()))
                     answers[key] = {'choice': first_key, 'probabilities': {first_key: 1.0}}
@@ -375,7 +377,7 @@ def test_positioning_with_only_move_orders_omits_continue_when_enemies_visible()
 
     jev = PositioningJev()
     commands = asyncio.run(decide(view, jev, {}))
-    assert commands == [{'unit_tag': 1001, 'ability_id': 16, 'point': [3.0, 4.0]}]
+    assert commands == [{'unit_tag': 1001, 'ability_id': 23, 'point': [8.0, 3.0]}]
 
 
 def test_continue_allowed_when_attack_orders_are_already_useful():
@@ -527,18 +529,39 @@ def _marine_with_stop_hold_and_attack(tag=1001, health_fraction=1.0, orders=None
 
 def test_positioning_omits_stop_and_hold_when_attack_available_in_engagement():
     """Stop/Hold must not be choosable as positioning while Attack is also offered in engagement."""
-    unit, attack, stop, hold, north = _marine_with_stop_hold_and_attack()
+    enemy = {'type': 'Zergling', 'alliance': 'Enemy', 'position': [5.0, 5.0]}
+    units = []
+    for tag, other in [(1, 2), (2, 1)]:
+        units.append({
+            'tag': tag,
+            'type': 'Marine',
+            'position': [float(tag), 0.0],
+            'health': 45,
+            'health_fraction': 1.0,
+            'build_progress': 1.0,
+            'orders': [],
+            'candidates': [
+                {'id': 'stop', 'description': 'Stop',
+                 'command': {'unit_tag': tag, 'ability_id': 4}},
+                {'id': 'hold_position', 'description': 'Hold position',
+                 'command': {'unit_tag': tag, 'ability_id': 18}},
+                {'id': 'north', 'description': 'Move north',
+                 'command': {'unit_tag': tag, 'ability_id': 16, 'point': [float(tag), 6.0]}},
+                {'id': f'join_{other}', 'description': f'Join {other}',
+                 'command': {'unit_tag': tag, 'ability_id': 16, 'point': [float(other), 0.0]}},
+                {'id': 'attack_1234', 'description': 'Attack target 1234',
+                 'command': {'unit_tag': tag, 'ability_id': 3674, 'target_unit_tag': 1234}},
+            ],
+        })
     view = {
         'loop': 100,
         'objective': 'Test objective',
         'resources': {'minerals': 100, 'vespene': 0},
         'explored_map': {'rows_north_to_south': ['...'], 'bounds': [0, 0, 10, 10]},
-        'visible_entities': [
-            {'type': 'Zergling', 'alliance': 'Enemy', 'position': [5.0, 5.0]}
-        ],
+        'visible_entities': [enemy],
         'last_known_entities': [],
         'unit_type_facts': {'Marine': {'catalog_weapons': []}},
-        'self': [unit],
+        'self': units,
     }
     logs = []
 
@@ -556,19 +579,24 @@ def test_positioning_omits_stop_and_hold_when_attack_available_in_engagement():
                 elif key == 'Marine':
                     assert 'group_stop' not in criteria, f'Stop should be omitted in engagement. Got: {list(criteria)}'
                     assert 'group_hold_position' not in criteria
-                    assert 'group_north' in criteria
+                    assert 'group_north' not in criteria
+                    assert 'group_join_1' in criteria
                     assert 'group_attack_1234' not in criteria
-                    answers[key] = {'choice': 'group_north', 'probabilities': {'group_north': 1.0}}
+                    answers[key] = {'choice': 'group_join_1', 'probabilities': {'group_join_1': 1.0}}
                 elif criteria:
                     first_key = next(iter(criteria.keys()))
                     answers[key] = {'choice': first_key, 'probabilities': {first_key: 1.0}}
             return answers
 
     commands = asyncio.run(decide(view, PositioningJev(), {}))
-    assert commands == [north]
+    assert commands == [{'unit_tag': 1, 'ability_id': 18},
+                        {'unit_tag': 2, 'ability_id': 16, 'point': [1.0, 0.0]}]
     omitted = [fields for event, fields in logs if event == 'stop_hold_suppressed']
     assert omitted
     assert set(omitted[0]['omitted']) >= {'group_stop', 'group_hold_position'}
+    moved = [fields for event, fields in logs if event == 'move_suppressed']
+    assert moved
+    assert 'group_north' in moved[0]['omitted']
 
 
 def test_combat_keeps_tagged_attack_and_omits_stop():
@@ -635,6 +663,7 @@ def test_stop_and_hold_remain_when_not_in_engagement():
                 elif key == 'Marine':
                     assert 'group_stop' in criteria
                     assert 'group_hold_position' in criteria
+                    assert 'group_north' in criteria
                     answers[key] = {'choice': 'group_stop', 'probabilities': {'group_stop': 1.0}}
                 elif criteria:
                     first_key = next(iter(criteria.keys()))
@@ -674,6 +703,7 @@ def test_stop_remains_in_engagement_when_no_attack_is_offered():
                 elif key == 'Marine':
                     assert 'group_stop' in criteria
                     assert 'group_hold_position' in criteria
+                    assert 'group_north' in criteria
                     answers[key] = {'choice': 'group_stop', 'probabilities': {'group_stop': 1.0}}
                 elif criteria:
                     first_key = next(iter(criteria.keys()))
@@ -705,12 +735,13 @@ def test_damaged_units_omit_stop_without_visible_enemies():
             for key, question in questions.items():
                 criteria = question.get('criteria', {})
                 if key == 'purpose_Marine':
-                    positioning = criteria.get('positioning', '')
-                    assert 'Stop and Hold Position are omitted' in positioning
+                    combat = criteria.get('combat', '')
+                    assert 'ordinary Move are omitted' in combat
                     answers[key] = {'choice': 'combat', 'probabilities': {'combat': 1.0}}
                 elif key == 'Marine':
                     assert 'group_stop' not in criteria
                     assert 'group_hold_position' not in criteria
+                    assert 'group_north' not in criteria
                     assert 'group_attack_move_east' in criteria
                     answers[key] = {'choice': 'group_attack_move_east',
                                     'probabilities': {'group_attack_move_east': 1.0}}
@@ -741,6 +772,8 @@ def test_join_still_offered_when_hold_is_omitted_in_engagement():
                  'command': {'unit_tag': tag, 'ability_id': 4}},
                 {'id': 'hold_position', 'description': 'Hold position',
                  'command': {'unit_tag': tag, 'ability_id': 18}},
+                {'id': 'north', 'description': 'Move north',
+                 'command': {'unit_tag': tag, 'ability_id': 16, 'point': [float(tag), 6.0]}},
                 {'id': f'join_{other}', 'description': f'Join {other}',
                  'command': {'unit_tag': tag, 'ability_id': 16, 'point': [float(other), 0.0]}},
                 {'id': 'attack_1234', 'description': 'Attack target 1234',
@@ -767,6 +800,7 @@ def test_join_still_offered_when_hold_is_omitted_in_engagement():
                     assert 'group_join_1' in criteria
                     assert 'group_stop' not in criteria
                     assert 'group_hold_position' not in criteria
+                    assert 'group_north' not in criteria
                     answers[key] = {'choice': 'group_join_1', 'probabilities': {'group_join_1': 1.0}}
                 elif criteria:
                     first_key = next(iter(criteria.keys()))
@@ -813,6 +847,7 @@ def test_individual_omits_stop_and_hold_when_attack_and_enemies():
                 elif key == '1001':
                     assert 'stop' not in criteria
                     assert 'hold_position' not in criteria
+                    assert 'north' not in criteria
                     assert 'attack_1234' in criteria
                     answers[key] = {'choice': 'attack_1234', 'probabilities': {'attack_1234': 1.0}}
                 elif criteria:
@@ -825,3 +860,137 @@ def test_individual_omits_stop_and_hold_when_attack_and_enemies():
     omitted = [fields for event, fields in logs if event == 'stop_hold_suppressed']
     assert any('stop' in fields.get('omitted', []) or 'group_stop' in fields.get('omitted', [])
                for fields in omitted)
+    moved = [fields for event, fields in logs if event == 'move_suppressed']
+    assert any('north' in fields.get('omitted', []) for fields in moved)
+
+
+def test_engagement_omits_plain_move_when_attack_is_offered():
+    """Compass Move and other ordinary move-to-point options are omitted; Attack-Move stays."""
+    unit, attack, stop, hold, north = _marine_with_stop_hold_and_attack(extra_candidates=[
+        {'id': 'east', 'description': 'Move east',
+         'command': {'unit_tag': 1001, 'ability_id': 16, 'point': [9.0, 3.0]}},
+        {'id': 'south', 'description': 'Move south',
+         'command': {'unit_tag': 1001, 'ability_id': 16, 'point': [3.0, 0.0]}},
+        {'id': 'west', 'description': 'Move west',
+         'command': {'unit_tag': 1001, 'ability_id': 16, 'point': [0.0, 3.0]}},
+        {'id': 'map_move_north_east', 'description': 'move to north-east map sector',
+         'command': {'unit_tag': 1001, 'ability_id': 16, 'point': [8.0, 8.0]}},
+        {'id': 'last_known_move_99', 'description': 'move to last-known location',
+         'command': {'unit_tag': 1001, 'ability_id': 16, 'point': [1.0, 1.0]}},
+        {'id': 'move_50', 'description': 'Move to visible MineralField tag 50',
+         'command': {'unit_tag': 1001, 'ability_id': 16, 'point': [4.0, 4.0]}},
+        {'id': 'map_attack_move_north_east', 'description': 'attack move to north-east map sector',
+         'command': {'unit_tag': 1001, 'ability_id': 23, 'point': [8.0, 8.0]}},
+        {'id': 'last_known_attack_move_99', 'description': 'attack move to last-known location',
+         'command': {'unit_tag': 1001, 'ability_id': 23, 'point': [1.0, 1.0]}},
+    ])
+    view = {
+        'loop': 100,
+        'objective': 'Test objective',
+        'resources': {'minerals': 100, 'vespene': 0},
+        'explored_map': {'rows_north_to_south': ['...'], 'bounds': [0, 0, 10, 10]},
+        'visible_entities': [
+            {'type': 'Zergling', 'alliance': 'Enemy', 'position': [5.0, 5.0]}
+        ],
+        'last_known_entities': [],
+        'unit_type_facts': {'Marine': {'catalog_weapons': []}},
+        'self': [unit],
+    }
+    logs = []
+
+    class CombatJev(MockJev):
+        def log(self, event, **fields):
+            logs.append((event, fields))
+
+        async def ask(self, state, questions):
+            self.calls.append({'state': state, 'questions': questions})
+            answers = {}
+            for key, question in questions.items():
+                criteria = question.get('criteria', {})
+                if key == 'purpose_Marine':
+                    assert 'positioning' not in criteria
+                    answers[key] = {'choice': 'combat', 'probabilities': {'combat': 1.0}}
+                elif key == 'Marine':
+                    for banned in ('group_north', 'group_east', 'group_south', 'group_west',
+                                   'group_map_move_north_east', 'group_last_known_move_99',
+                                   'group_move_50'):
+                        assert banned not in criteria, banned
+                    assert 'group_attack_1234' in criteria
+                    assert 'group_attack_move_east' in criteria
+                    assert 'group_map_attack_move_north_east' in criteria
+                    assert 'group_last_known_attack_move_99' in criteria
+                    answers[key] = {'choice': 'group_attack_1234',
+                                    'probabilities': {'group_attack_1234': 1.0}}
+                elif criteria:
+                    first_key = next(iter(criteria.keys()))
+                    answers[key] = {'choice': first_key, 'probabilities': {first_key: 1.0}}
+            return answers
+
+    commands = asyncio.run(decide(view, CombatJev(), {}))
+    assert commands == [attack]
+    moved = [fields for event, fields in logs if event == 'move_suppressed']
+    assert moved
+    omitted = set(moved[0]['omitted'])
+    assert omitted >= {'group_north', 'group_east', 'group_south', 'group_west',
+                       'group_map_move_north_east', 'group_last_known_move_99', 'group_move_50'}
+    assert 'group_attack_1234' not in omitted
+    assert 'group_attack_move_east' not in omitted
+    assert 'group_map_attack_move_north_east' not in omitted
+    assert 'group_last_known_attack_move_99' not in omitted
+
+
+def test_individual_omits_point_move_keeps_attack_move():
+    """Individual menus drop move-to-point that is not attack-move."""
+    unit, attack, stop, hold, north = _marine_with_stop_hold_and_attack(extra_candidates=[
+        {'id': 'map_move_south_west', 'description': 'move to south-west map sector',
+         'command': {'unit_tag': 1001, 'ability_id': 16, 'point': [1.0, 1.0]}},
+    ])
+    unit['surroundings'] = [
+        {'tag': 1234, 'type': 'Zergling', 'alliance': 'Enemy', 'distance': 2.8,
+         'east_offset': 2.0, 'north_offset': 2.0}
+    ]
+    view = {
+        'loop': 100,
+        'objective': 'Test objective',
+        'resources': {'minerals': 100, 'vespene': 0},
+        'explored_map': {'rows_north_to_south': ['...'], 'bounds': [0, 0, 10, 10]},
+        'visible_entities': [
+            {'type': 'Zergling', 'alliance': 'Enemy', 'position': [5.0, 5.0]}
+        ],
+        'last_known_entities': [],
+        'unit_type_facts': {'Marine': {'catalog_weapons': []}},
+        'self': [unit],
+    }
+    logs = []
+
+    class IndividualJev(MockJev):
+        def log(self, event, **fields):
+            logs.append((event, fields))
+
+        async def ask(self, state, questions):
+            self.calls.append({'state': state, 'questions': questions})
+            answers = {}
+            for key, question in questions.items():
+                criteria = question.get('criteria', {})
+                if key == 'purpose_Marine':
+                    answers[key] = {'choice': 'individual', 'probabilities': {'individual': 1.0}}
+                elif key == '1001':
+                    assert 'north' not in criteria
+                    assert 'map_move_south_west' not in criteria
+                    assert 'attack_move_east' in criteria
+                    assert 'attack_1234' in criteria
+                    answers[key] = {'choice': 'attack_move_east',
+                                    'probabilities': {'attack_move_east': 1.0}}
+                elif criteria:
+                    first_key = next(iter(criteria.keys()))
+                    answers[key] = {'choice': first_key, 'probabilities': {first_key: 1.0}}
+            return answers
+
+    commands = asyncio.run(decide(view, IndividualJev(), {}))
+    assert commands == [{'unit_tag': 1001, 'ability_id': 23, 'point': [9.0, 3.0]}]
+    moved = [fields for event, fields in logs if event == 'move_suppressed']
+    assert moved
+    omitted = {key for fields in moved for key in fields.get('omitted', [])}
+    assert {'north', 'map_move_south_west'} <= omitted
+    assert 'attack_move_east' not in omitted
+    assert 'attack_1234' not in omitted

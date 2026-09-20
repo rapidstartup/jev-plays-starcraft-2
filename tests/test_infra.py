@@ -671,12 +671,30 @@ def test_continue_predicates_distinguish_idle_combat_from_existing_work():
     assert player.is_attack_option('group_attack_1234')
     assert player.is_attack_option('group_attack_move_east')
     assert not player.is_attack_option('group_stop')
-    available={'group_stop':'Stop','group_attack_1234':'Attack','group_north':'Move'}
+    assert player.is_plain_move_option('group_north')
+    assert player.is_plain_move_option('east')
+    assert player.is_plain_move_option('group_south')
+    assert player.is_plain_move_option('west')
+    assert player.is_plain_move_option('group_move_50')
+    assert player.is_plain_move_option('map_move_north_east')
+    assert player.is_plain_move_option('last_known_move_5')
+    assert not player.is_plain_move_option('group_attack_1234')
+    assert not player.is_plain_move_option('group_attack_move_east')
+    assert not player.is_plain_move_option('map_attack_move_north_east')
+    assert not player.is_plain_move_option('last_known_attack_move_5')
+    assert not player.is_plain_move_option('group_join_1')
+    assert not player.is_plain_move_option('join_1')
+    available={'group_stop':'Stop','group_attack_1234':'Attack','group_north':'Move','group_join_1':'Join'}
     assert player.suppress_stop_hold(attacking_visible, available)
     assert player.suppress_stop_hold(damaged_moving, available)
     assert not player.suppress_stop_hold(idle, available)
     assert not player.suppress_stop_hold(attacking_visible, {'group_stop':'Stop','group_north':'Move'})
-    assert player.without_stop_hold(available) == {'group_attack_1234':'Attack','group_north':'Move'}
+    assert player.without_stop_hold(available) == {'group_attack_1234':'Attack','group_north':'Move','group_join_1':'Join'}
+    assert player.suppress_plain_move(attacking_visible, available)
+    assert player.suppress_plain_move(damaged_moving, available)
+    assert not player.suppress_plain_move(idle, available)
+    assert not player.suppress_plain_move(attacking_visible, {'group_stop':'Stop','group_north':'Move'})
+    assert player.without_plain_move(available) == {'group_stop':'Stop','group_attack_1234':'Attack','group_join_1':'Join'}
 
 
 def test_idle_combat_purpose_does_not_noop_via_continue():
@@ -803,16 +821,18 @@ def test_positioning_move_orders_with_visible_enemies_suppress_continue():
             if 'purpose_Marine' in questions:
                 assert 'continue' not in questions['purpose_Marine']['criteria']
                 combat = questions['purpose_Marine']['criteria']['combat']
-                positioning = questions['purpose_Marine']['criteria']['positioning']
                 assert 'Attack or Attack-Move' in combat
-                assert 'Attack or Attack-Move' in positioning
-                return {'purpose_Marine':{'choice':'positioning'}}
+                assert 'positioning' not in questions['purpose_Marine']['criteria']
+                return {'purpose_Marine':{'choice':'combat'}}
             assert 'continue' not in questions['Marine']['criteria']
-            assert 'group_north' in questions['Marine']['criteria']
-            return {'Marine':{'choice':'group_north'}}
+            assert 'group_north' not in questions['Marine']['criteria']
+            assert 'group_attack_move_east' in questions['Marine']['criteria']
+            return {'Marine':{'choice':'group_attack_move_east'}}
     view={'loop':1,'self':units,'visible_entities':[{'type':'Zergling','alliance':'Enemy','position':[20,20]}]}
-    assert asyncio.run(player.decide(view,Model(),{}))==[move]
+    assert asyncio.run(player.decide(view,Model(),{}))==[{'unit_tag':1,'ability_id':23,'point':[8,0]}]
     assert any(event=='continue_suppressed' for event,_ in logs)
+    assert any(event=='move_suppressed' and 'group_north' in fields.get('omitted', [])
+               for event,fields in logs)
 
 
 def test_income_observation_distinguishes_missing_from_zero():

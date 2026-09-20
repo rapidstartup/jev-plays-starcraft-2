@@ -370,13 +370,32 @@ def is_stop_or_hold_option(key):
     return option_id(key) in ('stop', 'hold_position')
 
 
+def is_plain_move_option(key):
+    """Ordinary Move and compass Move. Attack-Move and join/regroup are not plain Move."""
+    action = option_id(key)
+    if is_attack_option(key) or action.startswith('join_'):
+        return False
+    if action in ('north', 'south', 'east', 'west'):
+        return True
+    return action.startswith(('move_', 'last_known_move_', 'map_move_'))
+
+
 def suppress_stop_hold(facts, available):
     """Stop/Hold are not fight implementations when Attack is also offered in engagement."""
     return selection_in_engagement(facts) and any(is_attack_option(k) for k in available)
 
 
+def suppress_plain_move(facts, available):
+    """Ordinary Move is not a fight implementation when Attack is also offered in engagement."""
+    return selection_in_engagement(facts) and any(is_attack_option(k) for k in available)
+
+
 def without_stop_hold(criteria):
     return {k: v for k, v in criteria.items() if not is_stop_or_hold_option(k)}
+
+
+def without_plain_move(criteria):
+    return {k: v for k, v in criteria.items() if not is_plain_move_option(k)}
 
 
 def unit_in_engagement(unit, view):
@@ -741,6 +760,12 @@ async def decide(view, jev, memory):
                 for k in omitted:
                     criteria.pop(k)
                 jev.log('stop_hold_suppressed',loop=view['loop'],cohort=kind,omitted=omitted)
+        if suppress_plain_move(facts, criteria):
+            omitted = [k for k in criteria if is_plain_move_option(k)]
+            if omitted:
+                for k in omitted:
+                    criteria.pop(k)
+                jev.log('move_suppressed',loop=view['loop'],cohort=kind,omitted=omitted)
         # Add combat-specific guidance when threats are nearby
         combat_guidance = ''
         if has_nearby_threats:
@@ -749,7 +774,7 @@ async def decide(view, jev, memory):
                              f'Idle units: {idle_count}/{len(selected)}. '
                              'Prioritize engagement over inaction when units are idle and enemies are close. '
                              'Prefer Attack or Attack-Move over Move or Stop; ordinary Move and Stop do not fight. '
-                             'Stop and Hold Position are omitted while Attack is available.')
+                             'Stop, Hold Position, and ordinary Move are omitted while Attack is available.')
         
         questions[kind] = {
             'type':'choice',
@@ -773,8 +798,8 @@ async def decide(view, jev, memory):
         'income':'Collect resource income to fund unit production and construction.',
         'production':'Produce more units.',
         'construction':'Construct one of the available_projects buildings, including any supply capacity listed there.',
-        'combat':'Attack enemies or attack-move toward a location.' + (' RECOMMENDED: Visible enemies detected. Prefer Attack or Attack-Move over Move or Stop; ordinary Move and Stop do not fight. Stop and Hold Position are not combat implementations and are omitted when Attack is available.' if has_visible_enemies else ''),
-        'positioning':'Move, regroup, scout, stop or hold position. Ordinary Move changes location only: moving near a resource does not harvest it, moving near a building does not repair or enter it, and ordinary Move does not attack along the route.' + (' When enemies are visible or units are damaged, Stop and Hold Position are omitted if Attack or Attack-Move is available; they do not fight. Prefer Attack or Attack-Move over ordinary Move.' if has_visible_enemies else ''),
+        'combat':'Attack enemies or attack-move toward a location.' + (' RECOMMENDED: Visible enemies detected. Prefer Attack or Attack-Move over Move or Stop; ordinary Move and Stop do not fight. Stop, Hold Position, and ordinary Move are not combat implementations and are omitted when Attack is available.' if has_visible_enemies else ''),
+        'positioning':'Move, regroup, scout, stop or hold position. Ordinary Move changes location only: moving near a resource does not harvest it, moving near a building does not repair or enter it, and ordinary Move does not attack along the route.' + (' When enemies are visible or units are damaged, Stop, Hold Position, and ordinary Move are omitted if Attack or Attack-Move is available; they do not fight. Prefer Attack or Attack-Move. regroup/join remains available.' if has_visible_enemies else ''),
         'other':'Use another available ability.',
         'individual':'Let separate Jev decisions choose orders for individual units.',
         'continue':'Keep the existing orders unchanged, whatever those orders currently are.' + (' If current queues are only Move, Stop, Patrol or Hold while enemies are visible, that does not attack; prefer Attack or Attack-Move.' if has_visible_enemies else ''),
@@ -809,11 +834,11 @@ async def decide(view, jev, memory):
             combat_note = (f' NOTE: Enemies visible on the map, {idle_count} of your {len(cohorts[kind])} units are idle. '
                          'Prefer Attack or Attack-Move over Move or Stop; consider combat over passive positioning.')
         elif has_visible_enemies:
-            combat_note = (' Visible enemies are present. Prefer combat Attack or Attack-Move over positioning Move, Stop, Patrol or Hold. Stop and Hold are omitted from concrete orders while Attack is available.')
+            combat_note = (' Visible enemies are present. Prefer combat Attack or Attack-Move over positioning Move, Stop, Patrol or Hold. Stop, Hold, and ordinary Move are omitted from concrete orders while Attack is available.')
         halt_note = ''
         if (not has_visible_enemies and selection_in_engagement(facts)
                 and any(is_attack_option(k) for k in q['criteria'])):
-            halt_note = ' Stop and Hold Position are omitted while Attack or Attack-Move is available; they do not fight.'
+            halt_note = ' Stop, Hold Position, and ordinary Move are omitted while Attack or Attack-Move is available; they do not fight.'
         purpose_questions[f'purpose_{kind}'] = {
             'type':'choice',
             'instructions':f'Choose how the {len(cohorts[kind])} {kind} units should contribute to completing the mission now. '
@@ -1005,6 +1030,12 @@ async def decide_individual(view, jev, memory):
                 actions.pop(k, None)
             if omitted:
                 jev.log('stop_hold_suppressed',loop=view['loop'],cohort=tag,omitted=omitted)
+            omitted = [k for k in options if is_plain_move_option(k)]
+            for k in omitted:
+                options.pop(k)
+                actions.pop(k, None)
+            if omitted:
+                jev.log('move_suppressed',loop=view['loop'],cohort=tag,omitted=omitted)
         candidates[tag] = actions
         local = {k: v for k, v in unit.items() if k not in {'candidates', 'tag'}}
         history = memory.setdefault('history', {}).setdefault(tag, [])
