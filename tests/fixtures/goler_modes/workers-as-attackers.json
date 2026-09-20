@@ -1,0 +1,153 @@
+{
+  "id": "workers-as-attackers",
+  "goler_mode": "workers used to attack enemy base instead of army",
+  "expected_guide_avoid_contains": [
+    "workers_as_attackers",
+    "worker"
+  ],
+  "expected_jev_bias": "stop_workers_attacking_assign_gather_or_army",
+  "view": {
+    "loop": 2400,
+    "objective": "Destroy the Logistics Headquarters. Raynor must survive.",
+    "resources": {
+      "minerals": 350,
+      "vespene": 0,
+      "food_used": 18,
+      "food_cap": 23
+    },
+    "completed_upgrades": [],
+    "explored_map": {
+      "w": 64,
+      "h": 64
+    },
+    "visible_entities": [
+      {
+        "type": "Zergling",
+        "position": [
+          40.0,
+          42.0
+        ]
+      },
+      {
+        "type": "Hatchery",
+        "position": [
+          45.0,
+          45.0
+        ]
+      }
+    ],
+    "last_known_entities": [],
+    "unit_type_facts": {},
+    "self": [
+      {
+        "tag": 1,
+        "type": "SCV",
+        "position": [
+          38.0,
+          40.0
+        ],
+        "health_fraction": 1.0,
+        "health": 45,
+        "orders": [
+          {
+            "ability": "Attack",
+            "target": "Hatchery"
+          }
+        ],
+        "candidates": [],
+        "build_progress": 1.0
+      },
+      {
+        "tag": 2,
+        "type": "SCV",
+        "position": [
+          39.0,
+          41.0
+        ],
+        "health_fraction": 1.0,
+        "health": 45,
+        "orders": [
+          {
+            "ability": "Attack",
+            "target": "Hatchery"
+          }
+        ],
+        "candidates": [],
+        "build_progress": 1.0
+      },
+      {
+        "tag": 3,
+        "type": "SCV",
+        "position": [
+          20.0,
+          20.0
+        ],
+        "health_fraction": 1.0,
+        "health": 45,
+        "orders": [],
+        "candidates": [],
+        "build_progress": 1.0
+      },
+      {
+        "tag": 4,
+        "type": "Marine",
+        "position": [
+          22.0,
+          22.0
+        ],
+        "health_fraction": 1.0,
+        "health": 45,
+        "orders": [],
+        "candidates": [],
+        "build_progress": 1.0
+      },
+      {
+        "tag": 5,
+        "type": "CommandCenter",
+        "position": [
+          18.0,
+          18.0
+        ],
+        "health_fraction": 1.0,
+        "health": 45,
+        "orders": [],
+        "candidates": [],
+        "build_progress": 1.0
+      },
+      {
+        "tag": 6,
+        "type": "SupplyDepot",
+        "position": [
+          16.0,
+          20.0
+        ],
+        "health_fraction": 1.0,
+        "health": 45,
+        "orders": [],
+        "candidates": [],
+        "build_progress": 1.0
+      },
+      {
+        "tag": 7,
+        "type": "Barracks",
+        "position": [
+          24.0,
+          18.0
+        ],
+        "health_fraction": 1.0,
+        "health": 45,
+        "orders": [],
+        "candidates": [],
+        "build_progress": 1.0
+      }
+    ]
+  },
+  "jev_probe": {
+    "instructions": "Workers are attacking the enemy hatchery; only one marine is idle at home. Choose the priority.",
+    "criteria": {
+      "pull_workers_home_gather": "Stop SCVs from attacking; assign them to gather; let marines fight.",
+      "keep_workers_attacking": "Continue using SCVs as the main attack force.",
+      "all_army_to_town_center": "Pull everyone including the marine back to the Command Center."
+    }
+  }
+}

@@ -12,6 +12,8 @@ import random
 import re
 from collections import Counter
 
+from jev_sc2.guide import refresh_guide_into_state, guide_enabled
+
 
 def recent_outcomes(view, memory, window=672):
     """Measured observation history; disappearing units are not assumed dead."""
@@ -617,6 +619,9 @@ async def decide(view, jev, memory):
     state['units'] = [{k:u.get(k) for k in ('tag','type','position','health_fraction','orders','build_progress','cargo','energy','harvesters')}
                       for u in units]
     state['type_selection_facts'] = selection_facts(view,cohorts,{})
+    # Gemini Flash oversight (less often than Jev); never chooses unit actions.
+    if guide_enabled() or memory.get('guide_advice'):
+        await refresh_guide_into_state(view, state, memory, log=getattr(jev, 'log', None))
     cohorts = control_groups(units,memory.get('coordination','by_type'),learned,memory.setdefault('harvest_targets',{}))
     state['selection_facts'] = selection_facts(view,cohorts,memory.get('previous_cohort_counts',{}))
     strategy = memory.get('strategy')

@@ -1,0 +1,179 @@
+{
+  "id": "ignore-base-threat",
+  "goler_mode": "army holds original spawn approach while base is under attack",
+  "expected_guide_avoid_contains": [
+    "ignore_base",
+    "base_threat"
+  ],
+  "expected_jev_bias": "defend_threatened_base",
+  "view": {
+    "loop": 4200,
+    "objective": "Destroy the Logistics Headquarters. Raynor must survive.",
+    "resources": {
+      "minerals": 200,
+      "vespene": 0,
+      "food_used": 22,
+      "food_cap": 23
+    },
+    "completed_upgrades": [],
+    "explored_map": {
+      "w": 64,
+      "h": 64
+    },
+    "visible_entities": [
+      {
+        "type": "Zergling",
+        "position": [
+          19.0,
+          19.5
+        ]
+      },
+      {
+        "type": "Zergling",
+        "position": [
+          20.5,
+          18.0
+        ]
+      },
+      {
+        "type": "Roach",
+        "position": [
+          21.0,
+          20.0
+        ]
+      }
+    ],
+    "last_known_entities": [],
+    "unit_type_facts": {},
+    "self": [
+      {
+        "tag": 20,
+        "type": "Marine",
+        "position": [
+          35.0,
+          8.0
+        ],
+        "health_fraction": 1.0,
+        "health": 45,
+        "orders": [
+          {
+            "ability": "HoldPosition"
+          }
+        ],
+        "candidates": [],
+        "build_progress": 1.0
+      },
+      {
+        "tag": 21,
+        "type": "Marine",
+        "position": [
+          36.0,
+          8.5
+        ],
+        "health_fraction": 1.0,
+        "health": 45,
+        "orders": [
+          {
+            "ability": "HoldPosition"
+          }
+        ],
+        "candidates": [],
+        "build_progress": 1.0
+      },
+      {
+        "tag": 22,
+        "type": "Marine",
+        "position": [
+          34.5,
+          7.5
+        ],
+        "health_fraction": 1.0,
+        "health": 45,
+        "orders": [
+          {
+            "ability": "HoldPosition"
+          }
+        ],
+        "candidates": [],
+        "build_progress": 1.0
+      },
+      {
+        "tag": 23,
+        "type": "Marine",
+        "position": [
+          35.5,
+          9.0
+        ],
+        "health_fraction": 1.0,
+        "health": 45,
+        "orders": [
+          {
+            "ability": "HoldPosition"
+          }
+        ],
+        "candidates": [],
+        "build_progress": 1.0
+      },
+      {
+        "tag": 24,
+        "type": "CommandCenter",
+        "position": [
+          18.0,
+          18.0
+        ],
+        "health_fraction": 0.55,
+        "health": 45,
+        "orders": [],
+        "candidates": [],
+        "build_progress": 1.0
+      },
+      {
+        "tag": 25,
+        "type": "SCV",
+        "position": [
+          17.0,
+          17.0
+        ],
+        "health_fraction": 0.4,
+        "health": 45,
+        "orders": [],
+        "candidates": [],
+        "build_progress": 1.0
+      },
+      {
+        "tag": 26,
+        "type": "SCV",
+        "position": [
+          17.5,
+          18.5
+        ],
+        "health_fraction": 0.3,
+        "health": 45,
+        "orders": [],
+        "candidates": [],
+        "build_progress": 1.0
+      },
+      {
+        "tag": 27,
+        "type": "SupplyDepot",
+        "position": [
+          16.0,
+          20.0
+        ],
+        "health_fraction": 0.5,
+        "health": 45,
+        "orders": [],
+        "candidates": [],
+        "build_progress": 1.0
+      }
+    ]
+  },
+  "jev_probe": {
+    "instructions": "Enemy units are damaging the Command Center and workers. The marine army is holding far away at the original approach. Choose the priority.",
+    "criteria": {
+      "return_army_to_defend_base": "Move the marine force back to defend the threatened Command Center and workers.",
+      "keep_holding_original_approach": "Leave marines at the original approach; ignore base damage.",
+      "workers_attack_while_army_holds": "Send remaining SCVs to attack while marines stay put."
+    }
+  }
+}

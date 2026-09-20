@@ -1,0 +1,185 @@
+{
+  "id": "army-retreat-to-TC",
+  "goler_mode": "on defend, whole army retreats to town center instead of holding approach/bunkers",
+  "expected_guide_avoid_contains": [
+    "army_all_to_tc",
+    "town_center",
+    "tc"
+  ],
+  "expected_jev_bias": "hold_approach_not_tc",
+  "view": {
+    "loop": 3600,
+    "objective": "Destroy the Logistics Headquarters. Raynor must survive.",
+    "resources": {
+      "minerals": 500,
+      "vespene": 50,
+      "food_used": 28,
+      "food_cap": 31
+    },
+    "completed_upgrades": [],
+    "explored_map": {
+      "w": 64,
+      "h": 64
+    },
+    "visible_entities": [
+      {
+        "type": "Zergling",
+        "position": [
+          30.0,
+          12.0
+        ]
+      },
+      {
+        "type": "Zergling",
+        "position": [
+          31.0,
+          11.0
+        ]
+      }
+    ],
+    "last_known_entities": [],
+    "unit_type_facts": {},
+    "self": [
+      {
+        "tag": 10,
+        "type": "Marine",
+        "position": [
+          18.5,
+          18.5
+        ],
+        "health_fraction": 1.0,
+        "health": 45,
+        "orders": [
+          {
+            "ability": "Move",
+            "target": "CommandCenter"
+          }
+        ],
+        "candidates": [],
+        "build_progress": 1.0
+      },
+      {
+        "tag": 11,
+        "type": "Marine",
+        "position": [
+          18.2,
+          18.8
+        ],
+        "health_fraction": 1.0,
+        "health": 45,
+        "orders": [
+          {
+            "ability": "Move",
+            "target": "CommandCenter"
+          }
+        ],
+        "candidates": [],
+        "build_progress": 1.0
+      },
+      {
+        "tag": 12,
+        "type": "Marine",
+        "position": [
+          19.0,
+          18.0
+        ],
+        "health_fraction": 1.0,
+        "health": 45,
+        "orders": [
+          {
+            "ability": "Move",
+            "target": "CommandCenter"
+          }
+        ],
+        "candidates": [],
+        "build_progress": 1.0
+      },
+      {
+        "tag": 13,
+        "type": "Marine",
+        "position": [
+          17.8,
+          19.0
+        ],
+        "health_fraction": 1.0,
+        "health": 45,
+        "orders": [
+          {
+            "ability": "Move",
+            "target": "CommandCenter"
+          }
+        ],
+        "candidates": [],
+        "build_progress": 1.0
+      },
+      {
+        "tag": 14,
+        "type": "Bunker",
+        "position": [
+          28.0,
+          14.0
+        ],
+        "health_fraction": 1.0,
+        "health": 45,
+        "orders": [],
+        "candidates": [],
+        "build_progress": 1.0
+      },
+      {
+        "tag": 15,
+        "type": "CommandCenter",
+        "position": [
+          18.0,
+          18.0
+        ],
+        "health_fraction": 1.0,
+        "health": 45,
+        "orders": [],
+        "candidates": [],
+        "build_progress": 1.0
+      },
+      {
+        "tag": 16,
+        "type": "SCV",
+        "position": [
+          16.0,
+          17.0
+        ],
+        "health_fraction": 1.0,
+        "health": 45,
+        "orders": [
+          {
+            "ability": "Harvest_Gather_SCV"
+          }
+        ],
+        "candidates": [],
+        "build_progress": 1.0
+      },
+      {
+        "tag": 17,
+        "type": "SCV",
+        "position": [
+          15.5,
+          17.5
+        ],
+        "health_fraction": 1.0,
+        "health": 45,
+        "orders": [
+          {
+            "ability": "Harvest_Gather_SCV"
+          }
+        ],
+        "candidates": [],
+        "build_progress": 1.0
+      }
+    ]
+  },
+  "jev_probe": {
+    "instructions": "Zerglings approach from the south; marines are all walking back to the Command Center while a bunker sits empty on the approach. Choose the priority.",
+    "criteria": {
+      "hold_approach_and_bunker": "Send marines to the southern approach and load/use the bunker; do not stack on the TC.",
+      "all_army_to_town_center": "Keep pulling the entire army onto the Command Center.",
+      "ignore_threat_push_forward": "Ignore the approaching zerglings and push elsewhere."
+    }
+  }
+}
