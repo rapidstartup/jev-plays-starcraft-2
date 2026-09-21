@@ -98,12 +98,47 @@ def test_rejects_hidden_targets_unowned_units_and_unoffered_commands():
     units.add(tag=2,alliance=raw.Enemy,display_type=raw.Hidden)
     cmd={'unit_tag':1,'ability_id':23,'target_tag':2}
     view={'self':[{'candidates':[{'command':cmd}]}]}
-    assert validate_commands([cmd],view,observation)==[]
+    assert validate_commands([cmd],view,observation,fallback=False)==[]
     units[1].display_type=raw.Visible
-    assert len(validate_commands([cmd,cmd],view,observation))==1
-    assert validate_commands([{**cmd,'ability_id':999}],view,observation)==[]
+    assert len(validate_commands([cmd,cmd],view,observation,fallback=False))==1
+    assert validate_commands([{**cmd,'ability_id':999}],view,observation,fallback=False)==[]
     units[0].alliance=raw.Enemy
-    assert validate_commands([cmd],view,observation)==[]
+    assert validate_commands([cmd],view,observation,fallback=False)==[]
+
+
+def test_validate_fallback_attack_moves_fogged_target_and_logs_reason():
+    from jev_sc2.view import validate_commands_with_rejects
+    observation=sc.ResponseObservation()
+    units=observation.observation.raw_data.units
+    units.add(tag=1,alliance=raw.Self,display_type=raw.Visible)
+    units.add(tag=2,alliance=raw.Enemy,display_type=raw.Hidden)
+    cmd={'unit_tag':1,'ability_id':23,'target_tag':2}
+    view={'self':[{'tag':1,'position':[10.0,10.0],
+                   'candidates':[{'id':'attack_2','command':cmd}]}],
+          'visible_entities':[{'tag':2,'position':[15.0,12.0],'alliance':'Enemy'}]}
+    actions, rejects = validate_commands_with_rejects([cmd], view, observation)
+    assert len(actions)==1
+    assert actions[0].action_raw.unit_command.ability_id==23
+    assert actions[0].action_raw.unit_command.target_world_space_pos.x==15.0
+    assert actions[0].action_raw.unit_command.target_world_space_pos.y==12.0
+    assert rejects[0]['reason']=='target_not_visible'
+    assert rejects[0]['fallback']=='attack_move'
+
+
+def test_validate_fallback_remaps_missing_caster_to_new_owned_unit():
+    from jev_sc2.view import validate_commands_with_rejects
+    observation=sc.ResponseObservation()
+    units=observation.observation.raw_data.units
+    units.add(tag=9,alliance=raw.Self,display_type=raw.Visible)  # newly appeared marine
+    cmd={'unit_tag':1,'ability_id':23,'target_tag':2}
+    view={'self':[{'tag':1,'position':[10.0,10.0],
+                   'candidates':[{'id':'attack_2','command':cmd}]}],
+          'visible_entities':[{'tag':2,'position':[20.0,10.0],'alliance':'Enemy'}]}
+    actions, rejects = validate_commands_with_rejects([cmd], view, observation)
+    assert len(actions)==1
+    assert list(actions[0].action_raw.unit_command.unit_tags)==[9]
+    assert rejects[0]['reason']=='not_owned'
+    assert rejects[0]['fallback']=='attack_move'
 
 
 def test_debug_is_unavailable():
@@ -1040,6 +1075,7 @@ def test_large_jev_batch_splits_without_losing_choices_or_state():
     model.client=SimpleNamespace(alpha=SimpleNamespace(decisions=SimpleNamespace(create_async=create_async)))
     model.log=lambda *a,**k:None
     model.session='test';model.model='typesafe/jev-1.13'
+    model.timeout_ms=5000;model.via='openrouter';model.via_label='openrouter_decisions'
     model.max_calls=10;model.calls=0;model.inflight=0;model.cost=0
     state={'fact':'visible only'}
     questions={str(i):{'criteria':{'keep':'x'*25000}} for i in range(4)}
@@ -1136,6 +1172,7 @@ def test_server_token_rejection_splits_exact_questions_and_releases_budget(monke
     model.client=SimpleNamespace(alpha=SimpleNamespace(decisions=SimpleNamespace(create_async=create_async)))
     model.log=lambda *a,**k:None
     model.session='test';model.model='typesafe/jev-1.13'
+    model.timeout_ms=5000;model.via='openrouter';model.via_label='openrouter_decisions'
     model.max_calls=2;model.calls=0;model.inflight=0;model.cost=0
     state={'fact':'visible only'}
     questions={str(i):{'criteria':{'keep':'Continue'}} for i in range(2)}
@@ -1198,6 +1235,7 @@ def test_split_requests_scope_job_summaries_without_removing_world_facts():
     model.client=SimpleNamespace(alpha=SimpleNamespace(decisions=SimpleNamespace(create_async=create_async)))
     model.log=lambda *a,**k:None
     model.session='test';model.model='typesafe/jev-1.13'
+    model.timeout_ms=5000;model.via='openrouter';model.via_label='openrouter_decisions'
     model.max_calls=10;model.calls=0;model.inflight=0;model.cost=0
     questions={str(i):{'criteria':{'keep':'x'*25000}} for i in range(4)}
     state={'selection_facts':{k:{'count':1} for k in questions},'units':[{'tag':1}],
@@ -1209,3 +1247,115 @@ def test_split_requests_scope_job_summaries_without_removing_world_facts():
         assert request['state']['units']==state['units']
         assert request['state']['visible_entities']==state['visible_entities']
     assert len(state['selection_facts'])==4
+
+
+def test_unlimited_max_calls_never_raises_call_budget(monkeypatch):
+    """max_calls 0 / None must not raise CallBudgetReached."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    import jev_sc2.jev as module
+    response = SimpleNamespace(usage=SimpleNamespace(cost=0),
+                               model_dump=lambda **kwargs: {'answers': {}})
+    request = AsyncMock(return_value=response)
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'test-key-not-a-credential')
+    monkeypatch.setattr(module, 'OpenRouter', lambda **kwargs: SimpleNamespace(
+        alpha=SimpleNamespace(decisions=SimpleNamespace(create_async=request))))
+    for budget in (0, None, -1):
+        model = module.Jev(lambda *a, **k: None, 'test', max_calls=budget)
+        assert model.max_calls is None
+        async def thrice(m=model):
+            await m.ask({}, {})
+            await m.ask({}, {})
+            await m.ask({}, {})
+        asyncio.run(thrice())
+    assert request.await_count == 9
+
+
+def test_normalize_budget_and_control_exit_policy(tmp_path):
+    from types import SimpleNamespace
+    from jev_sc2.controller_log import unlimited, normalize_budget, ControllerLog
+    from jev_sc2.__main__ import write_control_json
+    assert unlimited(0) and unlimited(None) and unlimited(-5)
+    assert not unlimited(1) and not unlimited(3000)
+    assert normalize_budget(0) is None and normalize_budget(None) is None
+    assert normalize_budget(12) == 12
+    args = SimpleNamespace(
+        map='maps/traynor01.SC2Map', expected_map=None, objective='win',
+        seconds=0, max_calls=0, wall_status_seconds=3600, strict_unit_timeout=False,
+        retry_stalls=True, close_sc2=True, follow_camera=True, attach=False,
+    )
+    control = write_control_json(tmp_path, args, 'test-stamp')
+    assert control['exit_policy'] == 'win_or_death_only'
+    assert control['max_calls'] == 0 and control['seconds'] == 0
+    assert control['wall_status_seconds'] == 3600
+    assert 'openrouter_key_present' in control
+    ctrl = ControllerLog(tmp_path)
+    ctrl.emit('jev', latency_ms=12, via='typesafe_systemone',
+              questions={'Marine': {}}, response={'answers': {'Marine': {'choice': 'attack'}}})
+    ctrl.emit('wall_status', elapsed_s=3600, loop=100, own_units=12,
+              api_status='in_game', outcome_hint=None)
+    ctrl.close()
+    log_text = (tmp_path / 'controller.log').read_text(encoding='utf-8')
+    assert '[run_start]' in log_text and '[jev]' in log_text and '[wall_status]' in log_text
+    assert 'api_key' not in log_text.lower() or 'present' in log_text.lower()
+    import json as _json
+    rows = [_json.loads(l) for l in (tmp_path / 'controller.jsonl').read_text().splitlines() if l]
+    assert any(r['event'] == 'wall_status' for r in rows)
+
+
+
+def test_openjev_via_init_and_control_host(tmp_path, monkeypatch):
+    """JEV_VIA=openjev/codiv initializes System One client against Codiv/local (no network)."""
+    from types import SimpleNamespace
+    import jev_sc2.jev as module
+    from jev_sc2.__main__ import write_control_json
+
+    monkeypatch.setenv('CODIV_API_KEY', 'test-codiv-key-not-a-credential')
+    monkeypatch.delenv('OPENJEV_API_KEY', raising=False)
+    monkeypatch.delenv('TYPESAFE_API_KEY', raising=False)
+    monkeypatch.setenv('JEV_VIA', 'openjev')
+    monkeypatch.setenv('JEV_MODEL', 'openjev')
+    monkeypatch.delenv('OPENJEV_BASE_URL', raising=False)
+    monkeypatch.delenv('TYPESAFE_BASE_URL', raising=False)
+
+    events = []
+    jev = module.Jev(lambda e, **f: events.append((e, f)), 'test-openjev')
+    assert jev.via == 'openjev'
+    assert jev.via_label == 'openjev_codiv'
+    assert jev.model == 'openjev-latest'
+    assert jev.base_url == 'https://api.codiv.ai'
+    assert events and events[0][0] == 'jev_init'
+    assert events[0][1].get('via') == 'openjev_codiv'
+    assert events[0][1].get('base_url_host') == 'api.codiv.ai'
+
+    monkeypatch.setenv('JEV_VIA', 'codiv')
+    monkeypatch.setenv('OPENJEV_BASE_URL', 'http://127.0.0.1:8080')
+    monkeypatch.setenv('JEV_MODEL', 'openjev-0.1')
+    local = module.Jev(lambda *a, **k: None, 'test-local')
+    assert local.via == 'openjev'
+    assert local.via_label == 'openjev_local'
+    assert local.model == 'openjev-0.1'
+    assert module.openjev_host_only(local.base_url) == '127.0.0.1:8080'
+
+    monkeypatch.setenv('OPENJEV_BASE_URL', 'http://192.168.0.10:8080')
+    lan = module.Jev(lambda *a, **k: None, 'test-lan')
+    assert lan.via_label == 'openjev_local'
+
+    args = SimpleNamespace(
+        map='maps/traynor01.SC2Map', expected_map=None, objective='win',
+        seconds=0, max_calls=0, wall_status_seconds=3600, strict_unit_timeout=False,
+        retry_stalls=True, close_sc2=True, follow_camera=True, attach=False,
+    )
+    monkeypatch.setenv('JEV_VIA', 'openjev')
+    monkeypatch.setenv('OPENJEV_BASE_URL', 'https://api.codiv.ai')
+    control = write_control_json(tmp_path, args, 'openjev-stamp')
+    assert control['jev_via'] == 'openjev'
+    assert control['openjev_base_url'] == 'api.codiv.ai'
+    assert 'CODIV' not in str(control).upper() or 'present' in str(control).lower()
+    assert control.get('openjev_key_present') is True
+
+
+def test_still_running_respects_only_positive_seconds():
+    from jev_sc2.controller_log import normalize_budget
+    assert normalize_budget(0) is None
+    assert normalize_budget(1800) == 1800
