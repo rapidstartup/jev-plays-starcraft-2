@@ -680,9 +680,11 @@ def test_continue_predicates_distinguish_idle_combat_from_existing_work():
     shrinking_attacking={**attacking,'count_change_since_previous_decision':-2}
     damaged_attacking={**attacking,'damaged_count':3}
     assert player.continue_would_idle(idle,'combat')
-    assert not player.continue_would_idle(idle,'positioning')
+    assert player.continue_would_idle(idle,'positioning')  # fully idle → always no-op
+    assert player.continue_would_idle(idle)  # purpose=None / continue
+    assert player.continue_would_idle(idle,'continue')
     assert player.continue_would_idle(visible,'positioning')
-    assert not player.continue_would_idle(visible)
+    assert player.continue_would_idle(visible)  # still fully idle
     assert not player.continue_would_idle(attacking,'combat')
     assert player.continue_would_idle(threat)
     assert player.continue_would_idle(threat,'continue')
@@ -792,6 +794,51 @@ def test_idle_units_under_threat_cannot_choose_purpose_continue():
             return {'Marine':{'choice':'group_attack_move_east'}}
     view={'loop':1,'self':units,'visible_entities':[{'type':'Zergling','alliance':'Enemy','position':[5,0]}]}
     assert asyncio.run(player.decide(view,Model(),{}))==[attack]
+
+
+def test_fully_idle_mobile_combat_cannot_choose_purpose_continue():
+    """Raynor+Marines as MobileCombat cohort must not offer purpose continue when all idle."""
+    import player
+    attack={'unit_tag':1,'ability_id':23,'point':[8,0]}
+    move={'unit_tag':2,'ability_id':16,'point':[0,6]}
+    units=[
+        {'tag':1,'type':'Raynor','position':[0,0],'orders':[],
+         'candidates':[
+             {'id':'attack_move_east','description':'Attack-move east','command':attack},
+             {'id':'north','description':'Move north','command':{'unit_tag':1,'ability_id':16,'point':[0,6]}}]},
+        {'tag':2,'type':'Marine','position':[1,0],'orders':[],
+         'candidates':[
+             {'id':'attack_move_east','description':'Attack-move east','command':{'unit_tag':2,'ability_id':23,'point':[8,0]}},
+             {'id':'north','description':'Move north','command':move}]},
+        {'tag':3,'type':'Marine','position':[2,0],'orders':[],
+         'candidates':[
+             {'id':'attack_move_east','description':'Attack-move east','command':{'unit_tag':3,'ability_id':23,'point':[8,0]}},
+             {'id':'north','description':'Move north','command':{'unit_tag':3,'ability_id':16,'point':[2,6]}}]},
+    ]
+    logs=[]
+    class Model:
+        def log(self,event,**fields): logs.append((event,fields))
+        async def ask(self,state,questions):
+            if 'strategy' in questions:
+                return {'strategy':{'choice':'attack'},'coordination':{'choice':'mobile_combat'}}
+            if 'purpose_MobileCombat' in questions:
+                assert 'continue' not in questions['purpose_MobileCombat']['criteria'], (
+                    f"purpose continue offered for fully idle MobileCombat: "
+                    f"{list(questions['purpose_MobileCombat']['criteria'])}")
+                return {'purpose_MobileCombat':{'choice':'combat'}}
+            if 'MobileCombat' in questions:
+                assert 'continue' not in questions['MobileCombat']['criteria']
+                return {'MobileCombat':{'choice':'group_attack_move_east'}}
+            # fallback
+            out={}
+            for k,q in questions.items():
+                c=q.get('criteria') or {}
+                out[k]={'choice':next(iter(c))}
+            return out
+    cmds=asyncio.run(player.decide({'loop':1,'self':units},Model(),{}))
+    assert cmds, 'expected attack commands from idle MobileCombat'
+    purpose=[f for e,f in logs if e=='purpose_choice' and f.get('cohort')=='MobileCombat']
+    assert purpose and purpose[0].get('choice')=='combat'
 
 
 def test_continue_remains_available_when_combat_orders_already_exist():

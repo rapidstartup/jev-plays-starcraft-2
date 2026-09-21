@@ -124,8 +124,8 @@ def test_continue_suppressed_when_attack_orders_in_engagement():
     assert 'continue' not in criteria_keys, "Continue should be suppressed in engagement even with Attack orders"
 
 
-def test_continue_offered_when_no_visible_enemies():
-    """Continue should be offered when idle but no enemies are visible anywhere."""
+def test_continue_omitted_when_fully_idle_even_without_visible_enemies():
+    """Fully idle selections must not offer continue (cmds=0 forever); enemies optional."""
     view = {
         'loop': 100,
         'objective': 'Test objective',
@@ -150,27 +150,27 @@ def test_continue_offered_when_no_visible_enemies():
             }
         ]
     }
-    
-    memory = {}
-    jev = MockJev()
-    
-    commands = asyncio.run(decide(view, jev, memory))
-    
-    # Check that a question was asked
-    assert len(jev.calls) > 0
-    
-    # Find the Marine selection question
-    marine_question = None
-    for call in jev.calls:
-        for key, question in call['questions'].items():
-            if 'Marine' in key or any('Marine' in str(c) for c in question.get('criteria', {}).values()):
-                marine_question = question
-                break
-    
-    # Continue SHOULD be in the criteria when no enemies are visible
-    assert marine_question is not None, "Should have a Marine-related question"
-    criteria_keys = list(marine_question['criteria'].keys())
-    assert 'continue' in criteria_keys, "Continue should be offered when no visible enemies"
+
+    class IdleNoContinueJev(MockJev):
+        async def ask(self, state, questions):
+            self.calls.append({'state': state, 'questions': questions})
+            answers = {}
+            for key, question in questions.items():
+                criteria = question.get('criteria', {})
+                if key == 'purpose_Marine':
+                    assert 'continue' not in criteria, f"purpose continue offered: {list(criteria)}"
+                    answers[key] = {'choice': 'positioning', 'probabilities': {'positioning': 1.0}}
+                elif key == 'Marine':
+                    assert 'continue' not in criteria, f"group continue offered: {list(criteria)}"
+                    answers[key] = {'choice': 'group_north', 'probabilities': {'group_north': 1.0}}
+                elif criteria:
+                    first_key = next(iter(criteria.keys()))
+                    answers[key] = {'choice': first_key, 'probabilities': {first_key: 1.0}}
+            return answers
+
+    jev = IdleNoContinueJev()
+    commands = asyncio.run(decide(view, jev, {}))
+    assert commands == [{'unit_tag': 1001, 'ability_id': 16, 'point': [3.0, 4.0]}]
 
 
 def test_combat_actions_highlighted_with_nearby_enemies():
