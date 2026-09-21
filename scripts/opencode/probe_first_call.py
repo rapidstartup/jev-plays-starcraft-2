@@ -17,6 +17,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 async def main() -> int:
     from jev_sc2.jev import Jev
 
+    if len(sys.argv) > 1:
+        os.environ['JEV_TIMEOUT_MS'] = sys.argv[1]
     jev = Jev(lambda *a, **k: None, "firstcall-probe")
     options = {
         "attack": "Commit forces to damaging or destroying the enemy base.",

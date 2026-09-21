@@ -42,4 +42,4 @@ $env:GUIDE_ENABLED = '1'
 $env:GUIDE_MODEL = 'google/gemini-2.5-flash'
 $env:GUIDE_EVERY_N_TICKS = '8'
 
-Write-Output 'ENV LD-LJ via=openjev base=127.0.0.1:8080 (upstream qwen3.5:4b on .10) model=openjev-latest timeout_ms=120000 memory=none'
+Write-Output 'ENV LD-LJ via=openjev base=127.0.0.1:8080 (upstream gemma4:26b on .10) model=openjev-latest timeout_ms=120000 memory=none'
