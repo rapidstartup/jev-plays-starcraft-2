@@ -4,11 +4,11 @@
 # <harness>\..\jev-copycats (or set $env:JEV_COPYCATS_ROOT first).
 # Secrets (.env, .env.local) are NEVER in git — recreate by hand on the box.
 #
-# 1) LD-DJ (djev): .env.local holds the djev key. Probe the hosted endpoint
-#    (confirm path from djev docs) with Bearer key + tiny q1 body (shape: see
-#    scripts/opencode/probe_game_payload.py). NOTE: jev_sc2/jev.py has NO djev
-#    via — if djev speaks SystemOne, add a JEV_VIA=djev mapping modelled on
-#    env-LD-DG.ps1, else file an adapter blocker.
+# 1) LD-DJ (djev): PROBED 2026-09-21 — hosted serving is DOWN server-side.
+#    openjev-latest → 422 unknown model (valid: djev / djev-pro).
+#    djev → 503 capacity_paused "Serving is paused by the administrator".
+#    djev-pro → 503 not enabled on this deployment. Key auth passes, payload
+#    shape accepted → NO client changes needed; retry djev later, then smoke.
 # 2) CC-DJEV: same key, hosted latency/correctness sample.
 # 3) CC-SEMIF (real SemIf TheoLeeCJ): jev-copycats\semif needs Python 3.10+,
 #    CUDA + GPU holding 4B BF16. `pip install -e .[test]`, then semif-score
