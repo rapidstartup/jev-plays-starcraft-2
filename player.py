@@ -458,7 +458,8 @@ def continue_would_idle(facts, purpose=None):
 
 def army_or_selections_fully_idle(state, view=None):
     """True when owned combat units (or all selection_facts) are fully idle and mission not done."""
-    if state.get('objective', {}).get('done'):
+    objective = state.get('objective')
+    if isinstance(objective, dict) and objective.get('done'):
         return False
     facts_map = state.get('selection_facts') or state.get('type_selection_facts') or {}
     if facts_map:
@@ -959,7 +960,9 @@ async def decide(view, jev, memory):
                 commands.extend(plans[kind][choice])
         commands.extend(await assign_support(view,state,jev,support_requests))
         return commands
-    investment, commands = await asyncio.gather(choose_investment(view,state,jev,memory), choose_orders())
+    # Serial: both paths call jev.ask; must not overlap on single-sequence SystemOne.
+    investment = await choose_investment(view,state,jev,memory)
+    commands = await choose_orders()
     # A selected purchase assigns its producer; preserve other Jev-selected orders.
     producer_tags = {c['unit_tag'] for c in investment}
     return [c for c in commands if c['unit_tag'] not in producer_tags]+investment
@@ -1125,8 +1128,13 @@ async def decide_individual(view, jev, memory):
             'criteria': options,
         }
     items = list(questions.items())
-    results = await asyncio.gather(*(jev.ask(state,dict(items[i:i+6]))
-                                    for i in range(0,len(items),6)), return_exceptions=True)
+    # Serial SystemOne asks — dgemma-small is single-sequence; parallel batches cross replies.
+    results = []
+    for i in range(0, len(items), 6):
+        try:
+            results.append(await jev.ask(state, dict(items[i:i+6])))
+        except BaseException as exc:
+            results.append(exc)
     answers = {}
     failures = []
     for result in results:
