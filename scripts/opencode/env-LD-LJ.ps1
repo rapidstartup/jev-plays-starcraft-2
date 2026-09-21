@@ -36,7 +36,7 @@ if (-not $env:OPENJEV_API_KEY) { Write-Output 'ENV_LD-LJ_RED missing LocalJev be
 $env:JEV_VIA = 'openjev'
 $env:OPENJEV_BASE_URL = 'http://127.0.0.1:8080'
 $env:JEV_MODEL = 'openjev-latest'
-$env:JEV_TIMEOUT_MS = '120000'
+$env:JEV_TIMEOUT_MS = '300000'
 $env:JEV_MEMORY_MODE = 'none'
 $env:GUIDE_ENABLED = '1'
 $env:GUIDE_MODEL = 'google/gemini-2.5-flash'
