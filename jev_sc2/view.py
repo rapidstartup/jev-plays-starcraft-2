@@ -432,27 +432,181 @@ async def make_view(client, observation, data, info, objective):
     return view
 
 
-def validate_commands(commands, offered_view, fresh_observation):
-    """Only exact offered commands for still-owned units and still-visible targets."""
+ATTACK_ABILITY_IDS = {23, 3674}
+MOVE_ABILITY_IDS = {16, 3794}
+
+
+def _command_to_action(cmd):
+    action = sc.Action()
+    out = action.action_raw.unit_command
+    out.ability_id = cmd['ability_id']
+    out.unit_tags.append(cmd['unit_tag'])
+    out.queue_command = False
+    if 'target_tag' in cmd:
+        out.target_unit_tag = cmd['target_tag']
+    if 'point' in cmd:
+        out.target_world_space_pos.x, out.target_world_space_pos.y = cmd['point']
+    return action
+
+
+def _lookup_target_point(cmd, offered_view):
+    if 'point' in cmd and cmd['point'] is not None:
+        return [float(cmd['point'][0]), float(cmd['point'][1])]
+    tag = cmd.get('target_tag')
+    if tag is None:
+        return None
+    for ent in offered_view.get('visible_entities') or []:
+        if ent.get('tag') == tag and ent.get('position'):
+            return [float(ent['position'][0]), float(ent['position'][1])]
+    for unit in offered_view.get('self') or []:
+        pos = unit.get('position')
+        for near in unit.get('surroundings') or []:
+            if near.get('tag') != tag:
+                continue
+            if near.get('position'):
+                return [float(near['position'][0]), float(near['position'][1])]
+            if pos is not None and 'east_offset' in near and 'north_offset' in near:
+                return [float(pos[0]) + float(near['east_offset']),
+                        float(pos[1]) + float(near['north_offset'])]
+        for cand in unit.get('candidates') or []:
+            ccmd = cand.get('command') or {}
+            if 'point' not in ccmd:
+                continue
+            if ccmd.get('target_tag') == tag or str(cand.get('id', '')).endswith(f'_{tag}'):
+                return [float(ccmd['point'][0]), float(ccmd['point'][1])]
+    return None
+
+
+def _attack_or_move_ability(cmd, offered_view, unit_tag):
+    """Prefer an attack ability the unit was offered; else move; else keep cmd's id."""
+    attack = move = None
+    for unit in offered_view.get('self') or []:
+        if unit.get('tag') != unit_tag and unit_tag in {u.get('tag') for u in offered_view.get('self') or []}:
+            # When remapping onto a different unit, scan that unit's candidates.
+            pass
+        if unit.get('tag') != unit_tag:
+            continue
+        for cand in unit.get('candidates') or []:
+            aid = (cand.get('command') or {}).get('ability_id')
+            if aid in ATTACK_ABILITY_IDS:
+                attack = aid
+            elif aid in MOVE_ABILITY_IDS:
+                move = aid
+    # Remap onto a unit that may not be in offered_view (new passenger): scan any army.
+    if attack is None and move is None:
+        for unit in offered_view.get('self') or []:
+            for cand in unit.get('candidates') or []:
+                aid = (cand.get('command') or {}).get('ability_id')
+                if aid in ATTACK_ABILITY_IDS:
+                    attack = aid
+                elif aid in MOVE_ABILITY_IDS and move is None:
+                    move = aid
+    if cmd.get('ability_id') in ATTACK_ABILITY_IDS or attack is not None:
+        return attack or cmd.get('ability_id') or 23, 'attack_move'
+    if move is not None:
+        return move, 'move'
+    if cmd.get('ability_id') in MOVE_ABILITY_IDS:
+        return cmd['ability_id'], 'move'
+    return (attack or cmd.get('ability_id') or 23), 'attack_move'
+
+
+def _army_remap_tags(cmd, offered_view, owned, seen):
+    """Owned units that should inherit intent when the original caster is gone."""
+    offered_tags = {u.get('tag') for u in offered_view.get('self') or []}
+    army_tags = set()
+    for unit in offered_view.get('self') or []:
+        for cand in unit.get('candidates') or []:
+            aid = (cand.get('command') or {}).get('ability_id')
+            if aid in ATTACK_ABILITY_IDS or 'target_tag' in (cand.get('command') or {}):
+                army_tags.add(unit.get('tag'))
+                break
+    remap = []
+    for tag in owned:
+        if tag in seen or tag == cmd.get('unit_tag'):
+            continue
+        if tag not in offered_tags:  # newly appeared (e.g. dropship passengers)
+            remap.append(tag)
+        elif tag in army_tags:
+            remap.append(tag)
+    return remap
+
+
+def validate_commands_with_rejects(commands, offered_view, fresh_observation, *, fallback=True):
+    """Validate commands; return (actions, rejects) with reasons and soft fallbacks."""
     fresh = fresh_observation.observation
     owned = {u.tag for u in fresh.raw_data.units if u.alliance == raw.Self}
     visible = {u.tag for u in fresh.raw_data.units if u.display_type == raw.Visible}
     offered = [c['command'] for u in offered_view['self'] for c in u['candidates']]
-    actions, seen = [], set()
+    actions, seen, rejects = [], set(), []
     for cmd in commands:
-        if cmd not in offered or cmd['unit_tag'] not in owned or cmd['unit_tag'] in seen:
+        record = {'command': dict(cmd)}
+        if cmd['unit_tag'] in seen:
+            record['reason'] = 'duplicate'
+            rejects.append(record)
+            continue
+        not_offered = cmd not in offered
+        if cmd['unit_tag'] not in owned:
+            record['reason'] = 'not_offered_and_not_owned' if not_offered else 'not_owned'
+            if fallback:
+                point = _lookup_target_point(cmd, offered_view)
+                target_tag = cmd.get('target_tag') if cmd.get('target_tag') in visible else None
+                remapped = False
+                for tag in _army_remap_tags(cmd, offered_view, owned, seen):
+                    ability, kind = _attack_or_move_ability(cmd, offered_view, tag)
+                    if point is not None:
+                        new_cmd = {'unit_tag': tag, 'ability_id': ability, 'point': point}
+                        kind = 'attack_move' if ability in ATTACK_ABILITY_IDS else 'move'
+                    elif target_tag is not None:
+                        new_cmd = {'unit_tag': tag, 'ability_id': ability, 'target_tag': target_tag}
+                        kind = 'attack'
+                    else:
+                        break
+                    actions.append(_command_to_action(new_cmd))
+                    seen.add(tag)
+                    remapped = True
+                    rejects.append({**record, 'fallback': kind, 'fallback_command': new_cmd})
+                if remapped:
+                    continue
+            rejects.append(record)
             continue
         if 'target_tag' in cmd and cmd['target_tag'] not in visible:
+            record['reason'] = 'target_not_visible' if not not_offered else 'not_offered_target_not_visible'
+            if fallback:
+                point = _lookup_target_point(cmd, offered_view)
+                if point is not None:
+                    ability, kind = _attack_or_move_ability(cmd, offered_view, cmd['unit_tag'])
+                    new_cmd = {'unit_tag': cmd['unit_tag'], 'ability_id': ability, 'point': point}
+                    actions.append(_command_to_action(new_cmd))
+                    seen.add(cmd['unit_tag'])
+                    rejects.append({**record, 'fallback': kind, 'fallback_command': new_cmd})
+                    continue
+            rejects.append(record)
             continue
-        action = sc.Action()
-        out = action.action_raw.unit_command
-        out.ability_id = cmd['ability_id']
-        out.unit_tags.append(cmd['unit_tag'])
-        out.queue_command = False
-        if 'target_tag' in cmd:
-            out.target_unit_tag = cmd['target_tag']
-        if 'point' in cmd:
-            out.target_world_space_pos.x, out.target_world_space_pos.y = cmd['point']
-        actions.append(action)
+        if not_offered:
+            record['reason'] = 'not_offered'
+            if fallback:
+                point = _lookup_target_point(cmd, offered_view)
+                if point is not None:
+                    ability, kind = _attack_or_move_ability(cmd, offered_view, cmd['unit_tag'])
+                    new_cmd = {'unit_tag': cmd['unit_tag'], 'ability_id': ability, 'point': point}
+                    actions.append(_command_to_action(new_cmd))
+                    seen.add(cmd['unit_tag'])
+                    rejects.append({**record, 'fallback': kind, 'fallback_command': new_cmd})
+                    continue
+            rejects.append(record)
+            continue
+        actions.append(_command_to_action(cmd))
         seen.add(cmd['unit_tag'])
+    return actions, rejects
+
+
+def validate_commands(commands, offered_view, fresh_observation, *, fallback=True):
+    """Submit still-legal offered commands; soft-fallback fogged/missing casters.
+
+    Slow LocalJev decisions often outlive target visibility. Default fallback
+    rewrites to attack-move/move toward last-known points so the army keeps acting.
+    Pass fallback=False for strict exact-match behaviour (tests).
+    """
+    actions, _rejects = validate_commands_with_rejects(
+        commands, offered_view, fresh_observation, fallback=fallback)
     return actions

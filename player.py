@@ -439,6 +439,11 @@ def selection_under_threat(facts):
 
 def continue_would_idle(facts, purpose=None):
     """Continue emits no commands. That is a no-op when idle units need work."""
+    count = facts.get('count') or 0
+    idle = facts.get('idle_count') or 0
+    # Fully idle selection: continue issues no SC2 commands (cmds=0 forever).
+    if count > 0 and idle >= count:
+        return True
     visible = enemies_are_visible(facts)
     # Combat/positioning in engagement always re-issues Attack/Attack-Move.
     # Stale or wrong Attack queues must not keep continue as a no-op.
@@ -449,6 +454,41 @@ def continue_would_idle(facts, purpose=None):
     return (purpose == 'combat' or (purpose == 'positioning' and visible)
             or selection_under_threat(facts))
 
+
+
+def army_or_selections_fully_idle(state, view=None):
+    """True when owned combat units (or all selection_facts) are fully idle and mission not done."""
+    objective = state.get('objective')
+    if isinstance(objective, dict) and objective.get('done'):
+        return False
+    facts_map = state.get('selection_facts') or state.get('type_selection_facts') or {}
+    if facts_map:
+        combatish = []
+        for kind, facts in facts_map.items():
+            count = facts.get('count') or 0
+            if count <= 0:
+                continue
+            # Prefer combat / mobile cohorts; fall back to any non-worker selection.
+            k = str(kind).lower()
+            if any(tok in k for tok in ('combat', 'marine', 'marauder', 'reaper', 'hellion',
+                                        'tank', 'thor', 'banshee', 'viking', 'liberator',
+                                        'medivac', 'raven', 'ghost', 'cyclone', 'widow',
+                                        'siege', 'battlecruiser')) or kind == 'MobileCombat':
+                combatish.append(facts)
+        targets = combatish if combatish else list(facts_map.values())
+        if targets and all((f.get('count') or 0) > 0 and (f.get('idle_count') or 0) >= (f.get('count') or 0)
+                           for f in targets):
+            return True
+    # Fallback: owned units with attack-capable candidates that are idle
+    if view is not None:
+        combat_units = []
+        for u in view.get('self') or []:
+            cids = {c.get('id') for c in (u.get('candidates') or [])}
+            if any(isinstance(cid, str) and 'attack' in cid for cid in cids):
+                combat_units.append(u)
+        if combat_units and all(not u.get('orders') for u in combat_units):
+            return True
+    return False
 
 def selection_facts(view, cohorts, previous_counts):
     facts = {}
@@ -635,6 +675,11 @@ async def decide(view, jev, memory):
             'recover':'Restore income and replace losses.',
             'continue_operations':'Let current tasks progress before changing commitment.',
         }
+        # Same spirit as purpose continue suppress: idle army must not pick continue_operations.
+        if army_or_selections_fully_idle(state, view):
+            options.pop('continue_operations', None)
+            jev.log('continue_operations_suppressed', loop=view['loop'],
+                    reason='owned_combat_or_selections_fully_idle')
         decision = await jev.ask({**control_state(state),'previous_strategy':strategy}, {'strategy': {
             'type':'choice',
             'instructions':'Choose the current strategic priority for completing the mission. '
@@ -915,7 +960,9 @@ async def decide(view, jev, memory):
                 commands.extend(plans[kind][choice])
         commands.extend(await assign_support(view,state,jev,support_requests))
         return commands
-    investment, commands = await asyncio.gather(choose_investment(view,state,jev,memory), choose_orders())
+    # Serial: both paths call jev.ask; must not overlap on single-sequence SystemOne.
+    investment = await choose_investment(view,state,jev,memory)
+    commands = await choose_orders()
     # A selected purchase assigns its producer; preserve other Jev-selected orders.
     producer_tags = {c['unit_tag'] for c in investment}
     return [c for c in commands if c['unit_tag'] not in producer_tags]+investment
@@ -1081,8 +1128,13 @@ async def decide_individual(view, jev, memory):
             'criteria': options,
         }
     items = list(questions.items())
-    results = await asyncio.gather(*(jev.ask(state,dict(items[i:i+6]))
-                                    for i in range(0,len(items),6)), return_exceptions=True)
+    # Serial SystemOne asks — dgemma-small is single-sequence; parallel batches cross replies.
+    results = []
+    for i in range(0, len(items), 6):
+        try:
+            results.append(await jev.ask(state, dict(items[i:i+6])))
+        except BaseException as exc:
+            results.append(exc)
     answers = {}
     failures = []
     for result in results:
