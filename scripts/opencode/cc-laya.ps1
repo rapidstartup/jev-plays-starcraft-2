@@ -7,6 +7,6 @@ $repo = Join-Path $cc 'nanojev'
 Set-Location $repo
 $py = (Join-Path $repo '.venv-nano\Scripts\python.exe')
 if (-not (Test-Path $py)) { Write-Output 'CC-LAYA_BLOCKED run cc-nano.ps1 first (needs .venv-nano)'; exit 1 }
-& $py -m pip install laya
+uv pip install --python $py laya  # uv venvs ship without pip; use uv pip, not python -m pip
 & $py -c "import time, json; from laya import Router; r=Router(preload=True); s='Refund the duplicate charge today or we cancel.'; q={'department':{'type':'choice','instructions':'Which department should handle this request?','criteria':{'billing':'invoices, payments, refunds','technical':'bugs, outages, system errors','sales':'pricing, new contracts'}}}; t=time.perf_counter(); ans=r.system_one(s,q); print('time=%.2fs' % (time.perf_counter()-t)); print(json.dumps(ans, default=str)[:300])"
 Write-Output 'CC-LAYA smoke done'

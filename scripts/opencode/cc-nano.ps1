@@ -18,7 +18,7 @@ if (-not (Test-Path .\checkpoints\NanoJev\best.safetensors)) {
 }
 $busy = Get-NetTCPConnection -LocalPort 8771 -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $busy) {
-  Start-Process -FilePath $py -ArgumentList @('scripts/serve_decisions.py','--checkpoint-dir','checkpoints/NanoJev','--web-root','web','--port','8771','--precision','bf16') -WorkingDirectory (Join-Path $repo 'scripts') -WindowStyle Minimized
+  Start-Process -FilePath $py -ArgumentList @('serve_decisions.py','--checkpoint-dir','../checkpoints/NanoJev','--web-root','../web','--port','8771','--precision','bf16') -WorkingDirectory (Join-Path $repo 'scripts') -WindowStyle Minimized
   Start-Sleep -Seconds 60
 }
 curl.exe -sS -m 15 http://127.0.0.1:8771/api/health
