@@ -455,6 +455,40 @@ def continue_would_idle(facts, purpose=None):
             or selection_under_threat(facts))
 
 
+
+def army_or_selections_fully_idle(state, view=None):
+    """True when owned combat units (or all selection_facts) are fully idle and mission not done."""
+    if state.get('objective', {}).get('done'):
+        return False
+    facts_map = state.get('selection_facts') or state.get('type_selection_facts') or {}
+    if facts_map:
+        combatish = []
+        for kind, facts in facts_map.items():
+            count = facts.get('count') or 0
+            if count <= 0:
+                continue
+            # Prefer combat / mobile cohorts; fall back to any non-worker selection.
+            k = str(kind).lower()
+            if any(tok in k for tok in ('combat', 'marine', 'marauder', 'reaper', 'hellion',
+                                        'tank', 'thor', 'banshee', 'viking', 'liberator',
+                                        'medivac', 'raven', 'ghost', 'cyclone', 'widow',
+                                        'siege', 'battlecruiser')) or kind == 'MobileCombat':
+                combatish.append(facts)
+        targets = combatish if combatish else list(facts_map.values())
+        if targets and all((f.get('count') or 0) > 0 and (f.get('idle_count') or 0) >= (f.get('count') or 0)
+                           for f in targets):
+            return True
+    # Fallback: owned units with attack-capable candidates that are idle
+    if view is not None:
+        combat_units = []
+        for u in view.get('self') or []:
+            cids = {c.get('id') for c in (u.get('candidates') or [])}
+            if any(isinstance(cid, str) and 'attack' in cid for cid in cids):
+                combat_units.append(u)
+        if combat_units and all(not u.get('orders') for u in combat_units):
+            return True
+    return False
+
 def selection_facts(view, cohorts, previous_counts):
     facts = {}
     for kind, selected in cohorts.items():
@@ -640,6 +674,11 @@ async def decide(view, jev, memory):
             'recover':'Restore income and replace losses.',
             'continue_operations':'Let current tasks progress before changing commitment.',
         }
+        # Same spirit as purpose continue suppress: idle army must not pick continue_operations.
+        if army_or_selections_fully_idle(state, view):
+            options.pop('continue_operations', None)
+            jev.log('continue_operations_suppressed', loop=view['loop'],
+                    reason='owned_combat_or_selections_fully_idle')
         decision = await jev.ask({**control_state(state),'previous_strategy':strategy}, {'strategy': {
             'type':'choice',
             'instructions':'Choose the current strategic priority for completing the mission. '
