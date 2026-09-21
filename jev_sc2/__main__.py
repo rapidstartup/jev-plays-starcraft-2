@@ -30,6 +30,34 @@ def default_memory_mode():
     return value if value in MEMORY_MODES else 'none'
 
 
+def maybe_send_ui_dismiss_key():
+    """Windows-only: post Esc to the SC2 client to close Help/Tutorials panels.
+
+    Called only after the game clock has already stalled (no orders progressing),
+    rate-limited by the caller to one attempt per stall warning. Sends no clicks
+    and no game orders — the equivalent of a human pressing Esc on a help panel.
+    Opt out with JEV_UI_DISMISS=0 (a human then closes the panel instead).
+    Returns True when the key was posted.
+    """
+    if os.name != 'nt':
+        return False
+    if (os.getenv('JEV_UI_DISMISS') or '1').strip().lower() in ('0', 'false', 'no'):
+        return False
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        hwnd = user32.FindWindowW(None, 'StarCraft II')
+        if not hwnd:
+            return False
+        WM_KEYDOWN, WM_KEYUP, VK_ESCAPE = 0x0100, 0x0101, 0x1B
+        user32.PostMessageW(hwnd, WM_KEYDOWN, VK_ESCAPE, 0)
+        user32.PostMessageW(hwnd, WM_KEYUP, VK_ESCAPE, 0)
+        return True
+    except Exception:
+        return False
+
+
 def git_head(root):
     try:
         return subprocess.check_output(
@@ -485,9 +513,11 @@ async def run(args):
                     if (ui_stall_warned_at is None
                             or time.monotonic()-ui_stall_warned_at >= 30):
                         ui_stall_warned_at = time.monotonic()
+                        dismiss_sent = maybe_send_ui_dismiss_key()
                         log(
                             'awaiting_ui_dismiss',
                             stalled_for_s=round(stalled_for),
+                            ui_dismiss_key_sent=dismiss_sent,
                             reason=(
                                 'Game clock stalled; close Help/Tutorials/pause if open. '
                                 'Not leave/rejoin — that reopens Help and loops.'
@@ -549,7 +579,19 @@ async def run(args):
                 await asyncio.sleep(0.05)
                 continue
             except Exception as exc:
-                log('decision_error',error=type(exc).__name__,detail=str(exc)[:200])
+                detail = str(exc)[:200]
+                log('decision_error',error=type(exc).__name__,detail=detail)
+                soft = ('502' in detail or 'no JSON object' in detail
+                        or 'InternalServerError' in type(exc).__name__)
+                # soft_decision_failure: flaky local SystemOne should not kill LD in ~5s
+                if soft:
+                    failures += 1
+                    log('soft_decision_failure', failures=failures, threshold=25)
+                    if failures >= 25:
+                        log('stopped',reason='twenty-five consecutive decision failures')
+                        break
+                    await asyncio.sleep(min(8.0, 1.0 + failures * 0.5))
+                    continue
                 failures += 1
                 if failures >= 5:
                     log('stopped',reason='five consecutive decision failures')
@@ -677,3 +719,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
