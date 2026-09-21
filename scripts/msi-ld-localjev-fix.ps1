@@ -29,6 +29,18 @@ if ($py -notmatch 'continue_operations_suppressed') {
   }
 } else { Write-Output 'HARNESS_CONTINUE_OPS_SUPPRESS_OK' }
 
+# 2a) Prefer checked-in engine/config patches from harness
+$engPatch = Join-Path $harness 'scripts\patches\localjev-engine.ts'
+$cfgPatch = Join-Path $harness 'scripts\patches\localjev-config.ts'
+if ((Test-Path $engPatch) -and (Test-Path (Join-Path $lj 'src\engine.ts'))) {
+  Copy-Item $engPatch (Join-Path $lj 'src\engine.ts') -Force
+  Write-Output 'ENGINE_COPIED_FROM_HARNESS_PATCH'
+}
+if ((Test-Path $cfgPatch) -and (Test-Path (Join-Path $lj 'src\config.ts'))) {
+  Copy-Item $cfgPatch (Join-Path $lj 'src\config.ts') -Force
+  Write-Output 'CONFIG_COPIED_FROM_HARNESS_PATCH'
+}
+
 # 2) LocalJev engine: force json_object + format json (no json_schema)
 Set-Location $lj
 $eng = Join-Path $lj 'src\engine.ts'
