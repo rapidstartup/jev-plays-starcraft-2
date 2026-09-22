@@ -9,3 +9,4 @@ maps/
 *.SC2Replay
 .DS_Store
 
+.env.local
