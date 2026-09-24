@@ -31,13 +31,14 @@ def default_memory_mode():
 
 
 def maybe_send_ui_dismiss_key():
-    """Windows-only: post Esc to the SC2 client to close Help/Tutorials panels.
+    """Windows-only: post 'c' then Esc to the SC2 client to close Help/Tutorials panels.
 
     Called only after the game clock has already stalled (no orders progressing),
     rate-limited by the caller to one attempt per stall warning. Sends no clicks
-    and no game orders — the equivalent of a human pressing Esc on a help panel.
+    and no game orders — the equivalent of a human closing a help panel:
+    'c' is the SC2 tutorial/help close shortcut, Esc backs out generic menus.
     Opt out with JEV_UI_DISMISS=0 (a human then closes the panel instead).
-    Returns True when the key was posted.
+    Returns True when a key was posted.
     """
     if os.name != 'nt':
         return False
@@ -50,9 +51,12 @@ def maybe_send_ui_dismiss_key():
         hwnd = user32.FindWindowW(None, 'StarCraft II')
         if not hwnd:
             return False
-        WM_KEYDOWN, WM_KEYUP, VK_ESCAPE = 0x0100, 0x0101, 0x1B
-        user32.PostMessageW(hwnd, WM_KEYDOWN, VK_ESCAPE, 0)
-        user32.PostMessageW(hwnd, WM_KEYUP, VK_ESCAPE, 0)
+        WM_KEYDOWN, WM_KEYUP = 0x0100, 0x0101
+        VK_ESCAPE, VK_C = 0x1B, 0x43
+        # 'c' closes the tutorial/help panel; Esc backs out any residual menu.
+        for vk in (VK_C, VK_ESCAPE):
+            user32.PostMessageW(hwnd, WM_KEYDOWN, vk, 0)
+            user32.PostMessageW(hwnd, WM_KEYUP, vk, 0)
         return True
     except Exception:
         return False
@@ -97,6 +101,8 @@ def write_control_json(directory, args, stamp):
         'attach': bool(getattr(args, 'attach', False)),
         'guide_expected': os.getenv('GUIDE_ENABLED', '0') in ('1', 'true', 'True'),
         'guide_model': os.getenv('GUIDE_MODEL'),
+        'guide_backend': (os.getenv('GUIDE_BACKEND') or 'openrouter').strip().lower() or 'openrouter',
+        'guide_ollama_model': os.getenv('GUIDE_OLLAMA_MODEL'),
         'jev_model': os.getenv('JEV_MODEL', 'typesafe/jev-1.13'),
         'jev_via': (os.getenv('JEV_VIA') or 'openrouter').strip().lower() or 'openrouter',
         'jev_timeout_ms': timeout_ms,
@@ -519,8 +525,9 @@ async def run(args):
                             stalled_for_s=round(stalled_for),
                             ui_dismiss_key_sent=dismiss_sent,
                             reason=(
-                                'Game clock stalled; close Help/Tutorials/pause if open. '
-                                'Not leave/rejoin — that reopens Help and loops.'
+                                'Game clock stalled (Help/Tutorials/pause). '
+                                'Posted c+Esc to close it. Not leave/rejoin — that '
+                                'reopens Help and loops.'
                             ),
                         )
                     await asyncio.sleep(0.5)
@@ -717,7 +724,7 @@ def main():
     parser.add_argument('--close-sc2',action='store_true',
                         help='After the run, quit the attached/local SC2 process for batch teardown')
     parser.add_argument('--retry-stalls',action='store_true',
-                        help='Bounded in-process map restart after a ten-second game-clock stall (pause/tutorial); does not auto-dismiss UI')
+                        help='Bounded in-process map restart after a ten-second game-clock stall (pause/tutorial); UI is auto-dismissed with c+Esc unless JEV_UI_DISMISS=0')
     args=parser.parse_args()
     try:
         asyncio.run(run(args))
