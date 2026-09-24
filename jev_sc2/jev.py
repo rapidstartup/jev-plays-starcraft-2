@@ -42,7 +42,14 @@ def _resolve_typesafe_model(name):
 
 
 def _resolve_openjev_model(name):
-    """Map openjev* names; otherwise default to openjev-latest for this via."""
+    """Map openjev* names; otherwise default to openjev-latest for this via.
+
+    JEV_SYSTEMONE_MODEL overrides verbatim — use it for OpenJev-wire servers that
+    publish a different model id (e.g. LocalJev serves 'localjev-latest').
+    """
+    override = (os.environ.get('JEV_SYSTEMONE_MODEL') or '').strip()
+    if override:
+        return override
     if not name or not str(name).strip():
         return 'openjev-latest'
     raw = str(name).strip()
@@ -116,6 +123,8 @@ class Jev:
         self.log, self.session = log, session
         self.calls = 0
         self.inflight = 0
+        # dgemma-small / single-sequence SystemOne: never parallel POSTs
+        self._systemone_lock = asyncio.Lock()
         # 0 / None / negative => unlimited (no CallBudgetReached)
         self.max_calls = max_calls if max_calls is not None and max_calls > 0 else None
         self.cost = 0.0
@@ -179,11 +188,11 @@ class Jev:
                 questions=len(items),
                 request_chars=len(json.dumps([state, questions])),
             )
-            halves = await asyncio.gather(
-                self.ask(state, dict(items[:middle])),
-                self.ask(state, dict(items[middle:])),
-            )
-            return {key: value for half in halves for key, value in half.items()}
+            # Sequential halves: SystemOne backends like dgemma-small must not
+            # receive concurrent asks (single-sequence decoder).
+            left = await self.ask(state, dict(items[:middle]))
+            right = await self.ask(state, dict(items[middle:]))
+            return {**left, **right}
         if self.max_calls is not None and self.max_calls > 0 and self.calls + self.inflight >= self.max_calls:
             raise CallBudgetReached()
         self.inflight += 1
@@ -217,6 +226,8 @@ class Jev:
             # The server is authoritative about token limits. Splitting a rejected
             # batch retains the exact state, choices and criteria for each question.
             # Release this reservation before children reserve their own requests.
+            # Serial halves: SystemOne backends (dgemma-small) are single-sequence;
+            # concurrent asks cross replies even on the token-limit path.
             self.inflight -= 1
             try:
                 items = list(questions.items())
@@ -226,11 +237,9 @@ class Jev:
                     questions=len(items),
                     reason='server_token_limit',
                 )
-                halves = await asyncio.gather(
-                    self.ask(state, dict(items[:middle])),
-                    self.ask(state, dict(items[middle:])),
-                )
-                return {key: value for half in halves for key, value in half.items()}
+                left = await self.ask(state, dict(items[:middle]))
+                right = await self.ask(state, dict(items[middle:]))
+                return {**left, **right}
             finally:
                 self.inflight += 1
         finally:
@@ -252,23 +261,26 @@ class Jev:
         return response.model_dump(mode='json')
 
     async def _ask_systemone(self, state, questions):
-        """TypeSafe System One path — also used for OpenJev (Codiv or local)."""
-        kwargs = {
-            'api_key': self.api_key,
-            'timeout': self.timeout_ms / 1000.0,
-            'retry': RetryPolicy(max_retries=0),
-        }
-        if self.base_url:
-            # Explicit ctor base_url (TYPESAFE_BASE_URL env also works per SDK).
-            kwargs['base_url'] = self.base_url
-        async with AsyncTypeSafeClient(**kwargs) as client:
-            result = await client.system_one(
-                state=state, questions=questions, model=self.model
-            )
-        self.calls += 1
-        dumped = result.model_dump()
-        usage = dumped.get('usage') if isinstance(dumped, dict) else None
-        if isinstance(usage, dict) and usage.get('cost') is not None:
-            self.cost += usage['cost']
-        # else: no cost field — leave cost unchanged (increment 0); don't crash
-        return dumped
+        """TypeSafe System One path - also used for OpenJev (Codiv or local)."""
+        # Single-flight: dgemma-small visual decoder is single-sequence/stateful;
+        # concurrent POSTs cross replies (proven with nonce->other client's answer).
+        async with self._systemone_lock:
+            kwargs = {
+                'api_key': self.api_key,
+                'timeout': self.timeout_ms / 1000.0,
+                'retry': RetryPolicy(max_retries=0),
+            }
+            if self.base_url:
+                # Explicit ctor base_url (TYPESAFE_BASE_URL env also works per SDK).
+                kwargs['base_url'] = self.base_url
+            async with AsyncTypeSafeClient(**kwargs) as client:
+                result = await client.system_one(
+                    state=state, questions=questions, model=self.model
+                )
+            self.calls += 1
+            dumped = result.model_dump()
+            usage = dumped.get('usage') if isinstance(dumped, dict) else None
+            if isinstance(usage, dict) and usage.get('cost') is not None:
+                self.cost += usage['cost']
+            # else: no cost field - leave cost unchanged (increment 0); don't crash
+            return dumped
