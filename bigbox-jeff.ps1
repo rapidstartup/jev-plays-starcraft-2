@@ -73,21 +73,36 @@ if ($existing) {
 }
 
 # 6) health (model load takes ~30-60s)
+# NOTE: do NOT let a failed curl abort the loop. With $ErrorActionPreference='Stop',
+# curl.exe writing to stderr raises a terminating NativeCommandError on PS 5.1, so the
+# very first not-yet-listening probe (5s after launch) used to kill the script. Relax it
+# for the probe, then restore.
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
 $ready = $false
 for ($i = 0; $i -lt 30; $i++) {
   Start-Sleep -Seconds 5
   $h = curl.exe -sS -m 5 "http://127.0.0.1:$Port/healthz" 2>$null
   if ($h) { Write-Host "READY (~$(($i+1)*5)s) $h"; $ready = $true; break }
 }
-if (-not $ready) { Write-Warning "not ready yet - check $logOut / $logErr"; Pop-Location; exit 1 }
+$ErrorActionPreference = $prevEap
+if (-not $ready) {
+  Write-Warning "not ready after 150s - tail of the error/output logs follows"
+  if (Test-Path $logErr) { Get-Content $logErr -Tail 40 | ForEach-Object { Write-Host "  [err] $_" } }
+  if (Test-Path $logOut) { Get-Content $logOut -Tail 20 | ForEach-Object { Write-Host "  [out] $_" } }
+  Pop-Location; exit 1
+}
 
 # 7) a tiny decide through the wire format
 $body = '{"state":"A marine squad is near the enemy base.","questions":{"a":{"type":"choice","instructions":"Pick the next action.","criteria":{"attack":"Attack-move the squad forward.","hold":"Hold position."}}}}'
 $tmp = Join-Path $env:TEMP 'bigbox-jeff-smoke.json'
 Set-Content -Path $tmp -Value $body -Encoding ASCII
+$prevEap2 = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
 $sw = [Diagnostics.Stopwatch]::StartNew()
 $out = curl.exe -sS -m 60 -X POST "http://127.0.0.1:$Port/v1/systemone" -H "Content-Type: application/json" -H "Authorization: Bearer $Key" --data-binary "@$tmp" 2>&1
 $sw.Stop()
+$ErrorActionPreference = $prevEap2
 Write-Host ("decide: " + ($out -join ''))
 Write-Host ("decide latency: " + [math]::Round($sw.Elapsed.TotalSeconds,2) + "s")
 Pop-Location
