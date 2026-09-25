@@ -18,6 +18,7 @@ from .view import make_view, validate_commands, validate_commands_with_rejects
 from .camera import choose_shot
 from .outcome import OutcomeMonitor, ObjectiveWinEvidence
 from .controller_log import ControllerLog, unlimited, normalize_budget
+from .guide import guide_model
 
 ROOT = Path(__file__).resolve().parent.parent
 LOOPS_PER_REALTIME_SECOND = 22.4
@@ -102,9 +103,10 @@ def write_control_json(directory, args, stamp):
         'follow_camera': bool(getattr(args, 'follow_camera', False)),
         'attach': bool(getattr(args, 'attach', False)),
         'guide_expected': os.getenv('GUIDE_ENABLED', '0') in ('1', 'true', 'True'),
-        'guide_model': os.getenv('GUIDE_MODEL'),
+        'guide_model': guide_model(),
         'guide_backend': (os.getenv('GUIDE_BACKEND') or 'openrouter').strip().lower() or 'openrouter',
         'guide_ollama_model': os.getenv('GUIDE_OLLAMA_MODEL'),
+        'guide_image_attached': bool(os.getenv('GUIDE_IMAGE_PATH', '').strip()),
         'jev_model': os.getenv('JEV_MODEL', 'typesafe/jev-1.13'),
         'jev_via': (os.getenv('JEV_VIA') or 'openrouter').strip().lower() or 'openrouter',
         'jev_timeout_ms': timeout_ms,
@@ -750,4 +752,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

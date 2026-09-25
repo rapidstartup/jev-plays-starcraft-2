@@ -6,18 +6,19 @@ never picks unit actions. Jev remains the sole typed decision chooser.
 from __future__ import annotations
 
 import json
+import base64
+import mimetypes
 import os
 import re
 import time
+from pathlib import Path
 from typing import Any
 
 from openrouter import OpenRouter
 
-# Chosen 2026-09-20 after listing OpenRouter google/gemini-*-flash*.
-# google/gemini-2.5-flash: reliable JSON with response_format; non-lite/non-image.
-# Rejected for default: gemini-3.8-flash (finish=error/truncation),
-# gemini-3.5-flash (finish=length), *-image*, *:batch*, *-preview*.
-# Override via GUIDE_MODEL (e.g. google/gemini-3.5-flash-lite for cheaper).
+# Verified OpenRouter model id used by the vision bakeoff. Do not replace this
+# with a guessed version; override GUIDE_MODEL only with an id returned by the
+# provider's model catalog.
 DEFAULT_GUIDE_MODEL = "google/gemini-2.5-flash"
 
 GUIDE_SYSTEM = """You are the strategy / oversight brain for a StarCraft II agent.
@@ -28,6 +29,47 @@ ability ids, or per-unit micro. Return ONLY a JSON object with keys:
   suggested_intents: array of short intent strings Jev may weigh (not commands)
   avoid: array of anti-patterns to avoid (e.g. workers_as_attackers, army_all_to_tc)
 Keep each string compact. No markdown fences."""
+
+
+def guide_image_path() -> Path | None:
+    """Return the optional screenshot path used for multimodal guide calls."""
+    value = os.getenv("GUIDE_IMAGE_PATH", "").strip()
+    return Path(value) if value else None
+
+
+def image_data_url(path: str | os.PathLike[str]) -> str:
+    """Encode a local image as the data URL accepted by OpenRouter vision APIs."""
+    image_path = Path(path)
+    mime, _ = mimetypes.guess_type(image_path.name)
+    if not mime or not mime.startswith("image/"):
+        raise ValueError(f"Unsupported guide image type: {image_path.name!r}")
+    return "data:{0};base64,{1}".format(
+        mime, base64.b64encode(image_path.read_bytes()).decode("ascii")
+    )
+
+
+def guide_messages(user_text: str, image_path: str | os.PathLike[str] | None = None) -> list[dict[str, Any]]:
+    """Build a text or text-plus-image chat payload without leaking image bytes to logs."""
+    if image_path is None:
+        return [
+            {"role": "system", "content": GUIDE_SYSTEM},
+            {"role": "user", "content": user_text},
+        ]
+    content = [
+        {
+            "type": "text",
+            "text": (
+                user_text
+                + "\nA screenshot is attached. Use only visible evidence from it; "
+                "call out uncertainty when the UI is unreadable or occluded."
+            ),
+        },
+        {"type": "image_url", "image_url": {"url": image_data_url(image_path)}},
+    ]
+    return [
+        {"role": "system", "content": GUIDE_SYSTEM},
+        {"role": "user", "content": content},
+    ]
 
 
 def guide_enabled() -> bool:
@@ -170,18 +212,21 @@ class Guide:
         self.calls = 0
         self.cost = 0.0
 
-    async def advise(self, view_summary: dict[str, Any]) -> dict[str, Any]:
+    async def advise(
+        self,
+        view_summary: dict[str, Any],
+        *,
+        image_path: str | os.PathLike[str] | None = None,
+    ) -> dict[str, Any]:
         started = time.monotonic()
         user = (
             "Compact SC2 observation summary follows. Return JSON only.\n"
             + json.dumps(view_summary, default=str)[:12000]
         )
+        image_path = guide_image_path() if image_path is None else Path(image_path)
         response = await self.client.chat.send_async(
             model=self.model,
-            messages=[
-                {"role": "system", "content": GUIDE_SYSTEM},
-                {"role": "user", "content": user},
-            ],
+            messages=guide_messages(user, image_path),
             response_format={"type": "json_object"},
             temperature=0.2,
             max_tokens=512,
@@ -224,13 +269,20 @@ class Guide:
         self.cost += usage_cost
         raw = _extract_json(content if isinstance(content, str) else str(content))
         advice = _normalize_advice(raw, model=self.model, loop=view_summary.get("loop"))
+        quality = {
+            "valid_json": bool(raw),
+            "has_strategy": bool(raw.get("strategy")),
+            "has_notes": bool(raw.get("notes")),
+        }
         self.log(
             "guide",
             latency_ms=round((time.monotonic() - started) * 1000),
             model=self.model,
+            image_attached=image_path is not None,
             summary_chars=len(json.dumps(view_summary, default=str)),
             advice=advice,
             cost=usage_cost,
+            quality=quality,
         )
         return advice
 

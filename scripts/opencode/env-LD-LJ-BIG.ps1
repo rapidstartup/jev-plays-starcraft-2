@@ -15,6 +15,6 @@ $env:JEV_SYSTEMONE_MODEL = 'localjev-latest'   # send the wire id verbatim
 $env:JEV_TIMEOUT_MS = '120000'
 $env:JEV_MEMORY_MODE = 'none'
 $env:GUIDE_ENABLED = '1'
-$env:GUIDE_MODEL = 'google/gemini-3.8-flash'
+$env:GUIDE_MODEL = 'google/gemini-2.5-flash'
 $env:GUIDE_EVERY_N_TICKS = '8'
 Write-Output 'ENV LD-LJ-BIG via=openjev base=192.168.0.10:8080 model=localjev-latest (qwen3.5:4b) timeout_ms=120000 memory=none'
