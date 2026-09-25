@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jevbench.dev/schema/jevbench-result-v1.json",
+  "title": "JevBench result packet",
+  "description": "One measured JevBench attempt, smoke test, or official citation. The shape is based on the harness result packets and committed experiment summaries.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "bench_id",
+    "run_id",
+    "map",
+    "status",
+    "jev_via",
+    "jev_model",
+    "openjev_base_url",
+    "guide_model",
+    "memory_mode",
+    "calls",
+    "wall_seconds",
+    "hq_win_evidence",
+    "source",
+    "blocker",
+    "artifact_paths",
+    "notes"
+  ],
+  "properties": {
+    "bench_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "description": "Stable benchmark line identifier, for example LD-DG or CC-JEV."
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable identifier for this attempt or smoke sample."
+    },
+    "map": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "description": "Game map/scenario label. Use null for a non-game benchmark."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["win", "loss", "incomplete", "blocked"],
+      "description": "Canonical outcome. A native victory/defeat is mapped to win/loss only when the benchmark success bar is verified."
+    },
+    "jev_via": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "description": "Decision backend or transport, such as typesafe, openrouter, or openjev. Use null for an official-only citation."
+    },
+    "jev_model": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "description": "Decision model identifier, when a model was run."
+    },
+    "openjev_base_url": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "description": "Non-secret OpenJev endpoint label, when applicable. Never include credentials, query-string keys, or bearer tokens."
+    },
+    "guide_model": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "description": "Guide model identifier, when a guide model was used."
+    },
+    "memory_mode": {
+      "type": ["string", "null"],
+      "enum": ["none", "cross_run", "cross_game", null],
+      "description": "Harness memory mode. Use null when the benchmark does not have a Jev memory setting."
+    },
+    "calls": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of decision calls made by the run."
+    },
+    "wall_seconds": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "description": "Measured wall-clock duration in seconds, or null when not measured."
+    },
+    "hq_win_evidence": {
+      "type": ["boolean", "null"],
+      "description": "StarCraft II Liberation Day HQ-and-Raynor win evidence. Use null for non-Liberation-Day or non-game rows."
+    },
+    "source": {
+      "type": "string",
+      "enum": ["ours", "official"],
+      "description": "Provenance of the result: an independently run/smoked result or an official citation."
+    },
+    "blocker": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "description": "Actionable blocker explanation for blocked or incomplete attempts, otherwise null."
+    },
+    "artifact_paths": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Paths or labels for supporting artifacts; do not include secrets."
+    },
+    "notes": {
+      "type": "string",
+      "description": "Short human-readable context, caveats, or run notes."
+    },
+    "cost_usd": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "description": "Measured inference cost in USD, when available."
+    },
+    "latency_median_ms": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "description": "Median decision/inference latency in milliseconds, when available."
+    },
+    "latency_p95_ms": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "description": "P95 decision/inference latency in milliseconds, when available."
+    },
+    "decision_median_ms": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "description": "Median complete decision-cycle latency in milliseconds, when available."
+    },
+    "decision_p95_ms": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "description": "P95 complete decision-cycle latency in milliseconds, when available."
+    },
+    "actions_submitted": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Count of game actions accepted for submission, when applicable."
+    },
+    "correct": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Correct answers in a non-game or probe benchmark, when applicable."
+    },
+    "total": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Total scored answers in a non-game or probe benchmark, when applicable."
+    },
+    "extensions": {
+      "type": "object",
+      "description": "Domain-specific measurements or evidence. Keep common site fields at the top level and never place secrets here.",
+      "additionalProperties": true
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {"const": "blocked"}
+        }
+      },
+      "then": {
+        "required": ["blocker"],
+        "properties": {
+          "blocker": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  ]
+}

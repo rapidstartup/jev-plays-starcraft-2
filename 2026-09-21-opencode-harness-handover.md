@@ -129,7 +129,8 @@ run-<line-id>.ps1          # preflight → jev-launch-traynor → optional widge
 
 ## 6) Result packet → Gaming Dev (for jevbench.dev)
 
-Return one markdown or JSON blob per finished attempt (win, loss, or blocker):
+Return one markdown or JSON blob per finished attempt (win, loss, or blocker), conforming to
+the [canonical JevBench result schema](docs/jevbench-result.schema.json):
 
 ```json
 {
