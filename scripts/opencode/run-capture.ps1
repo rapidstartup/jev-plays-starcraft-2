@@ -46,9 +46,10 @@ if (-not $tiled) { Write-Output 'RUN_WARN tiling failed; recording full screen u
 
 $ff = (Get-Command ffmpeg.exe -ErrorAction Stop).Source
 $vid = Join-Path $guideDir.FullName 'screen-capture.mp4'
+# Published stills come from the PrintWindow game-window screenshotter (below), NOT
+# from the desktop video (which contains the IDE/workspace and is never published).
+# The desktop video is kept locally for debugging only and marked unsafe.
 if ($Capture -eq 'gamewindow') {
-  # Capture ONLY the game window: zero desktop leakage by construction.
-  # Tiling still applied so a human watcher sees game + log side by side.
   $ffArgs = @('-y','-f','gdigrab','-framerate','30','-i','title=StarCraft II','-c:v','libx264','-pix_fmt','yuv420p','-preset','veryfast','-movflags','+frag_keyframe+empty_moov', $vid)
 } else {
   $ffArgs = @('-y','-f','gdigrab','-framerate','30','-i','desktop','-vf','scale=1536:864','-c:v','libx264','-pix_fmt','yuv420p','-preset','veryfast','-movflags','+frag_keyframe+empty_moov', $vid)
@@ -56,6 +57,14 @@ if ($Capture -eq 'gamewindow') {
 $fp = Start-Process -FilePath $ff -ArgumentList $ffArgs -WindowStyle Minimized -PassThru
 Write-Output ("REC pid=" + $fp.Id + " file=" + $vid)
 $fp.Id | Set-Content (Join-Path $guideDir.FullName 'ffmpeg-pid.txt')
+# Mark the desktop video unsafe so no tooling mistakes it for publishable evidence.
+if ($Capture -ne 'gamewindow') { 'DESKTOP_CAPTURE_UNSAFE_DO_NOT_PUBLISH' | Set-Content (Join-Path $guideDir.FullName 'screen-capture.mp4.UNSAFE') }
+
+# Start game-window-only (PrintWindow) screenshotter for clean publishable stills.
+$shotDir = Join-Path $guideDir.FullName 'shots'
+New-Item -ItemType Directory -Path $shotDir -Force | Out-Null
+$shotProc = Start-Process powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $root 'scripts\opencode\shot-loop.ps1'),'-OutDir',$shotDir,'-EverySec','5','-MaxSec','4200') -WindowStyle Minimized -PassThru
+Write-Output ("SHOTLOOP pid=" + $shotProc.Id + " dir=" + $shotDir)
 
 # Wait for the harness result (up to 60 min), polling for result.json.
 # Watchdogs: (a) end-screen stall — game clock stalled >5 min means a modal dialog
@@ -108,11 +117,23 @@ while ((Get-Date) -lt $deadline) {
 }
 try { Stop-Process -Id $fp.Id -Force } catch {}
 Start-Sleep -Seconds 2
+try { Stop-Process -Id $shotProc.Id -Force } catch {}
+Start-Sleep -Seconds 1
 $probe = Join-Path (Split-Path $ff) 'ffprobe.exe'
-if (Test-Path $probe) { & $probe -v error -show_entries format=duration -of default=noprint_wrappers=1 $vid }
-& $ff -y -v error -sseof -25 -i $vid -vframes 1 (Join-Path $guideDir.FullName 'still-near-victory.png')
-& $ff -y -v error -sseof -90 -i $vid -vframes 1 (Join-Path $guideDir.FullName 'still-midgame.png')
-Get-ChildItem (Join-Path $guideDir.FullName 'screen-capture.mp4'), (Join-Path $guideDir.FullName '*.png') -ErrorAction SilentlyContinue | Select-Object Name,Length
+if (Test-Path $probe) { & $probe -v error -show_entries format=duration -of default=noprint_wrappers=1 $vid 2>$null }
+
+# Build the published stills from the PrintWindow game-window shots (clean).
+$shotFiles = @(Get-ChildItem (Join-Path $guideDir.FullName 'shots\shot-*.png') -ErrorAction SilentlyContinue | Sort-Object Name)
+if ($shotFiles.Count -gt 0) {
+  $near = $shotFiles[[Math]::Max(0, $shotFiles.Count - 2)]
+  $mid  = $shotFiles[[Math]::Max(0, [int]($shotFiles.Count / 2))]
+  Copy-Item $near.FullName (Join-Path $guideDir.FullName 'still-near-victory.png') -Force
+  Copy-Item $mid.FullName  (Join-Path $guideDir.FullName 'still-midgame.png') -Force
+  Write-Output ("STILLS built from PrintWindow shots: " + $shotFiles.Count + " shots")
+} else {
+  Write-Output 'STILLS_WARN no PrintWindow shots captured'
+}
+Get-ChildItem (Join-Path $guideDir.FullName 'still-*.png') -ErrorAction SilentlyContinue | Select-Object Name,Length
 
 # Collect done: close the log window + its server so the next run starts clean.
 # (The window intentionally stays open during the run for stills; it must not linger.)
