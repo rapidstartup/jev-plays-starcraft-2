@@ -55,6 +55,8 @@ Every decision logs its input, questions, full probabilities, model version, cos
 latency, policy revision, action results, and observation age to JSONL. Inspect it
 with ordinary Python or `tail -f runs/<run>/events.jsonl`. No API keys are logged.
 Use `uv run python scripts/report.py` for the latest run's measured summary.
+Result packets for publishing benchmark attempts follow
+[the JevBench schema](docs/JEVBENCH_SCHEMA.md).
 
 `uv run pytest -q` checks committed-source reload and command/visibility boundaries.
 

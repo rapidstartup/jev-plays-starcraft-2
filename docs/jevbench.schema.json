@@ -1,0 +1,252 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jevbench.dev/schemas/result/v1.json",
+  "title": "JevBench result packet",
+  "description": "A normalized result from one JevBench benchmark attempt. The packet is intentionally scenario-agnostic; game-specific evidence belongs in verification or metadata.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "bench_id",
+    "run_id",
+    "status",
+    "source"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Version of this packet schema."
+    },
+    "bench_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "description": "Stable benchmark-line identifier, for example LD-DG or CC-JEV."
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identifier for this attempt, normally the harness run directory timestamp."
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "win",
+        "loss",
+        "tie",
+        "incomplete",
+        "blocked"
+      ],
+      "description": "Normalized outcome. Harness victory and defeat values map to win and loss."
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "ours",
+        "official"
+      ],
+      "description": "Whether the result was produced by RapidStartup or cited from an external source."
+    },
+    "source_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Citation for an official result. Required when source is official."
+    },
+    "map": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Game/map label when the benchmark has one. Omit for non-game benchmarks."
+    },
+    "scenario": {
+      "type": "object",
+      "description": "Scenario identity and inputs that affect comparability across runs.",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Domain label such as game, coding, agent, or copycat."
+        },
+        "objective": {
+          "type": "string",
+          "minLength": 1
+        },
+        "parameters": {
+          "type": "object",
+          "description": "Scenario parameters; keep secrets and credentials out of this object."
+        }
+      }
+    },
+    "jev_via": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Decision backend recorded by the existing Jev harness."
+    },
+    "jev_model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "openjev_base_url": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Backend host label only; never include credentials or bearer tokens."
+    },
+    "guide_model": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "memory_mode": {
+      "type": "string",
+      "enum": [
+        "none",
+        "cross_run",
+        "cross_game"
+      ]
+    },
+    "calls": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of decision calls made during the attempt."
+    },
+    "wall_seconds": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "cost_usd": {
+      "type": "number",
+      "minimum": 0
+    },
+    "latency_median_ms": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "latency_p95_ms": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "actions_submitted": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "metrics": {
+      "type": "object",
+      "description": "Additional comparable scalar measurements. Unknown measurements are allowed for future benchmark domains.",
+      "additionalProperties": {
+        "type": [
+          "number",
+          "string",
+          "boolean",
+          "null"
+        ]
+      }
+    },
+    "hq_win_evidence": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "Legacy StarCraft II verification flag. Omit for other domains."
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "verified": {
+          "type": "boolean"
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "details": {
+          "type": "object"
+        }
+      }
+    },
+    "blocker": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "artifact_paths": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Paths or public artifact references; do not include secrets."
+    },
+    "notes": {
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Non-comparable display or provenance data for future benchmark domains."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "source": {
+            "const": "official"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "source_url"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "blocked"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "blocker"
+        ],
+        "properties": {
+          "blocker": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  ]
+}

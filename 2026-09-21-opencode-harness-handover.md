@@ -133,10 +133,11 @@ Return one markdown or JSON blob per finished attempt (win, loss, or blocker):
 
 ```json
 {
+  "schema_version": 1,
   "bench_id": "LD-DG",
   "run_id": "20260921T073335…",
   "map": "traynor01 / Liberation Day",
-  "status": "win | loss | incomplete | blocked",
+  "status": "win",
   "jev_via": "openjev",
   "jev_model": "openjev-latest",
   "openjev_base_url": "192.168.0.10:8011",
@@ -151,6 +152,10 @@ Return one markdown or JSON blob per finished attempt (win, loss, or blocker):
   "notes": "single-flight enforced; Help dismissed once"
 }
 ```
+
+The machine-readable version of this packet is
+[`docs/jevbench.schema.json`](docs/jevbench.schema.json); see
+[`docs/JEVBENCH_SCHEMA.md`](docs/JEVBENCH_SCHEMA.md) for field mappings.
 
 Gaming Dev will translate into jevbench rows / details drawer. **Do not** edit the public site yourself unless Nathan says so.
 
