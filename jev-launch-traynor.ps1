@@ -30,14 +30,18 @@ $control = [ordered]@{
 ($control | ConvertTo-Json -Depth 4) | Set-Content -Path (Join-Path $runDir 'control.json') -Encoding UTF8
 $launch = @"
 Set-Location '$root'
-`$env:GUIDE_ENABLED='1'
+# Preserve parent env (matrix combos); defaults only when unset.
+if (-not `$env:GUIDE_ENABLED) { `$env:GUIDE_ENABLED='1' }
 # Preserve JEV_VIA from parent env (typesafe|openrouter); do not overwrite
 if (-not `$env:JEV_VIA) { `$env:JEV_VIA='typesafe' }
-`$env:GUIDE_MODEL='google/gemini-2.5-flash'
-`$env:GUIDE_EVERY_N_TICKS='8'
+if (-not `$env:GUIDE_MODEL) { `$env:GUIDE_MODEL='google/gemini-2.5-flash' }
+if (-not `$env:GUIDE_BACKEND) { `$env:GUIDE_BACKEND='openrouter' }
+if (-not `$env:GUIDE_OLLAMA_MODEL) { `$env:GUIDE_OLLAMA_MODEL='gemma4:e2b' }
+if (-not `$env:GUIDE_OLLAMA_BASE_URL) { `$env:GUIDE_OLLAMA_BASE_URL='http://127.0.0.1:11434' }
+if (-not `$env:GUIDE_EVERY_N_TICKS) { `$env:GUIDE_EVERY_N_TICKS='8' }
 `$env:JEV_MODEL='$jevModel'
 if (-not `$env:JEV_TIMEOUT_MS) { `$env:JEV_TIMEOUT_MS='5000' }
-& '$root\.venv\Scripts\python.exe' -m jev_sc2 --map maps/traynor01.SC2Map --follow-camera --max-calls 0 --seconds 0 --wall-status-seconds 3600 --retry-stalls --objective 'Destroy the Logistics Headquarters. Raynor must survive.' --close-sc2 *>&1 | Tee-Object -FilePath '$runDir\run.log'
+& '$root\.venv\Scripts\python.exe' -m jev_sc2 --map maps/traynor01.SC2Map --follow-camera --max-calls 0 --seconds 1800 --wall-status-seconds 3600 --retry-stalls --objective 'Destroy the Logistics Headquarters. Raynor must survive.' --close-sc2 *>&1 | Tee-Object -FilePath '$runDir\run.log'
 "@
 Set-Content -Path (Join-Path $runDir 'launch.ps1') -Value $launch -Encoding UTF8
 $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $runDir 'launch.ps1')) -WorkingDirectory $root -WindowStyle Hidden -PassThru

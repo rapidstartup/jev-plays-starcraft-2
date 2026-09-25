@@ -1108,10 +1108,13 @@ def test_harvest_job_identity_survives_return_and_forgets_interrupted_assignment
     assert memory=={}
 
 
-def test_large_jev_batch_splits_without_losing_choices_or_state():
+def test_large_jev_batch_splits_without_losing_choices_or_state(monkeypatch):
     import asyncio
     from types import SimpleNamespace
     from jev_sc2.jev import Jev
+    # Exercise the oversized-request split in isolation; the compaction layer
+    # (JEV_COMPACT_STATE) shrinks payloads before this heuristic ever fires.
+    monkeypatch.setenv('JEV_COMPACT_STATE', '0')
     requests=[]
     async def create_async(**kw):
         requests.append(kw)
@@ -1208,6 +1211,8 @@ def test_server_token_rejection_splits_exact_questions_and_releases_budget(monke
     import jev_sc2.jev as module
     class Rejected(Exception): pass
     monkeypatch.setattr(module, 'BadRequestResponseError', Rejected)
+    # Test the reactive server-token split in isolation (compaction off).
+    monkeypatch.setenv('JEV_COMPACT_STATE', '0')
     requests=[]
     async def create_async(**kw):
         requests.append(kw)
@@ -1269,10 +1274,12 @@ def test_concrete_orders_keep_only_queried_job_summaries_and_all_world_facts():
     assert len(state['selection_facts'])==2
 
 
-def test_split_requests_scope_job_summaries_without_removing_world_facts():
+def test_split_requests_scope_job_summaries_without_removing_world_facts(monkeypatch):
     import asyncio
     from types import SimpleNamespace
     from jev_sc2.jev import Jev
+    # Test the oversized-request split in isolation (compaction off).
+    monkeypatch.setenv('JEV_COMPACT_STATE', '0')
     requests=[]
     async def create_async(**kw):
         requests.append(kw)

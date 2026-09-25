@@ -31,6 +31,183 @@ _LOCAL_OPENJEV_HOSTS = frozenset({
 })
 
 
+# ---- Compact SystemOne-style state projection --------------------------------
+# The full game view is ~7-11k chars (units, explored_map, weapon catalogs,
+# recent history). Small-context encoders (jeff/GLiFormer, a DeBERTa with a
+# ~512-token window) degrade super-linearly on that and time out, while the
+# hosted jev tolerates it. To keep the bench FAIR, every backend receives the
+# SAME compact projection built here (single chokepoint in Jev.ask), sized to fit
+# the smallest model so no backend is starved or overloaded.
+
+# Fields always dropped (terrain/catalog/history bloat; low per-decision value).
+_STATE_DROP = frozenset({
+    'explored_map', 'unit_type_facts', 'potential_projects', 'previous_investment_intent',
+    'observed_capabilities_by_type', 'units_full', 'memory', 'recent_outcomes_full',
+})
+# Raw entity lists are aggregated into alliance+type counts.
+_ENTITY_LIST_KEYS = ('visible_entities', 'last_known_entities', 'entities')
+_ENTITY_AGG_KEYS = {
+    'visible_entities': 'visible_entities_by_alliance_and_type',
+    'last_known_entities': 'stale_entities_by_alliance_and_type',
+    'entities': 'entities_by_alliance_and_type',
+}
+
+
+def _agg_entities(entities):
+    from collections import Counter
+    counts = Counter(f"{e.get('alliance','?')} {e.get('type','?')}" for e in (entities or []))
+    return dict(counts)
+
+
+def _round_pos(value):
+    if isinstance(value, list):
+        return [round(v, 1) if isinstance(v, float) else v for v in value]
+    return value
+
+
+def _trim_units(units, limit=24):
+    out = []
+    for u in (units or [])[:limit]:
+        out.append({k: _round_pos(u.get(k)) for k in ('tag', 'type', 'position', 'health_fraction') if k in u})
+    return out
+
+
+def _tail(items, n):
+    if not isinstance(items, list):
+        return items
+    return items[-n:]
+
+
+def _trim_guide(guide):
+    if not isinstance(guide, dict):
+        return guide
+    out = {}
+    for k in ('strategy', 'focus', 'notes'):
+        v = guide.get(k)
+        if isinstance(v, str):
+            out[k] = v[:220]
+        elif v is not None:
+            out[k] = v
+    return out
+
+
+def _trim_facts(facts, budget_per=180):
+    """Keep selection/type facts small: counts + short scalars, drop verbosity."""
+    if not isinstance(facts, dict):
+        return facts
+    out = {}
+    for name, f in facts.items():
+        if not isinstance(f, dict):
+            out[name] = f
+            continue
+        keep = {}
+        for k, v in f.items():
+            if isinstance(v, (int, float, bool)) or v is None:
+                keep[k] = v
+            elif isinstance(v, str):
+                keep[k] = v[:80]
+            elif isinstance(v, dict):
+                keep[k] = dict(list(v.items())[:8])
+            elif isinstance(v, list):
+                keep[k] = v[:6]
+        out[name] = keep
+    return out
+
+
+def compact_model_state(state, budget_chars=None):
+    """Project a full game view into a compact, decision-relevant SystemOne state.
+
+    Priority (kept longest): objective/resources/strategy/selection_facts/aggregated
+    entities are always retained (they are small and decision-critical); guide and
+    recent history are trimmed to the most recent; verbose per-unit and catalog
+    fields are dropped. Enforces a total char budget so no backend is overloaded.
+    """
+    if not isinstance(state, dict):
+        return state
+    if (os.getenv('JEV_COMPACT_STATE') or '1').strip().lower() in ('0', 'false', 'no'):
+        return state
+    if budget_chars is None:
+        budget_chars = int(os.getenv('JEV_STATE_BUDGET_CHARS', '2600'))
+    out = {}
+    # Always-keep scalar/small context.
+    for k in ('objective', 'resources', 'strategy_chosen_by_jev', 'previous_strategy'):
+        if k in state:
+            out[k] = state[k]
+    # Decision-critical per-cohort / per-type facts (question keys preserved upstream).
+    for k in ('selection_facts', 'type_selection_facts'):
+        if k in state:
+            out[k] = _trim_facts(state[k])
+    # Aggregate raw entity lists.
+    for src, dst in _ENTITY_AGG_KEYS.items():
+        if src in state and isinstance(state[src], list):
+            out[dst] = _agg_entities(state[src])
+    # Trimmed guidance and recent history (most relevant last).
+    if 'guide_oversight' in state:
+        out['guide_oversight'] = _trim_guide(state['guide_oversight'])
+    for k in ('recent_outcomes', 'recent_action_feedback'):
+        if k in state:
+            out[k] = _tail(state[k], 2)
+    # Trimmed per-unit essentials (position/health for orders), capped.
+    if 'units' in state:
+        out['units'] = _trim_units(state['units'])
+    # completed_upgrades is small but low value per-decision; keep only names.
+    if 'completed_upgrades' in state:
+        ups = state['completed_upgrades']
+        if isinstance(ups, list):
+            out['completed_upgrades'] = [u.get('name') if isinstance(u, dict) else u for u in ups][:12]
+
+    # Enforce budget by dropping the least-critical remaining keys (largest first)
+    # until it fits. Never drop objective/resources/selection_facts/aggregates.
+    protected = {'objective', 'resources', 'selection_facts', 'type_selection_facts',
+                 'strategy_chosen_by_jev', 'visible_entities_by_alliance_and_type',
+                 'stale_entities_by_alliance_and_type', 'entities_by_alliance_and_type',
+                 'guide_oversight'}
+    def size():
+        return len(json.dumps({'state': out, 'questions': {}}))
+    guard = 0
+    while size() > budget_chars and guard < 40:
+        guard += 1
+        droppable = [k for k in out if k not in protected]
+        if not droppable:
+            break
+        # Drop the largest droppable key first.
+        victim = max(droppable, key=lambda k: len(json.dumps(out[k])))
+        out.pop(victim, None)
+    return out
+
+
+def compact_questions(questions, max_desc_chars=None, max_instructions_chars=320):
+    """Shorten SystemOne questions without removing any selectable option.
+
+    Each criterion is a verbose natural-language blurb (repeated boilerplate +
+    the concrete action). We keep every criterion KEY (so the action space is
+    unchanged) and truncate only the description text, which always names the
+    action first. Instructions are trimmed too. This keeps state+questions small
+    enough for small-context encoders (jeff) without changing what can be chosen.
+    """
+    if not isinstance(questions, dict):
+        return questions
+    if (os.getenv('JEV_COMPACT_STATE') or '1').strip().lower() in ('0', 'false', 'no'):
+        return questions
+    if max_desc_chars is None:
+        max_desc_chars = int(os.getenv('JEV_DESC_CHARS', '110'))
+    out = {}
+    for name, q in questions.items():
+        if not isinstance(q, dict):
+            out[name] = q
+            continue
+        nq = dict(q)
+        ins = nq.get('instructions')
+        if isinstance(ins, str) and len(ins) > max_instructions_chars:
+            nq['instructions'] = ins[:max_instructions_chars].rstrip() + '…'
+        crit = nq.get('criteria')
+        if isinstance(crit, dict):
+            nq['criteria'] = {k: (v[:max_desc_chars].rstrip() + '…' if isinstance(v, str) and len(v) > max_desc_chars else v)
+                              for k, v in crit.items()}
+        out[name] = nq
+    return out
+
+
 def _resolve_typesafe_model(name):
     mapped = _TYPESAFE_MODEL_MAP.get(name, name)
     if mapped not in _TYPESAFE_MODELS:
@@ -178,6 +355,25 @@ class Jev:
         facts = state.get('selection_facts', {})
         if questions and set(questions) <= set(facts) and set(facts) != set(questions):
             state = {**state, 'selection_facts': {key: facts[key] for key in questions}}
+        # Compact SystemOne projection for every backend (fair bench + fits small
+        # encoders like jeff/GLiFormer). Applied here, the single shared chokepoint.
+        state = compact_model_state(state)
+        # Shorten question boilerplate (all option keys kept) and enforce a combined
+        # state+questions budget so the TOTAL context fits a small encoder.
+        total_budget = int(os.getenv('JEV_CONTEXT_BUDGET_CHARS', '3000'))
+        desc = int(os.getenv('JEV_DESC_CHARS', '110'))
+        questions = compact_questions(questions, max_desc_chars=desc)
+        def _ctx():
+            return len(json.dumps([state, questions]))
+        # Shrink local desc / state copy until the combined context fits.
+        guard = 0
+        while _ctx() > total_budget and guard < 30:
+            guard += 1
+            if desc > 45:
+                desc = int(desc * 0.75)
+                questions = compact_questions(questions, max_desc_chars=desc)
+            else:
+                state = compact_model_state(state, budget_chars=max(700, len(json.dumps(state)) // 2))
         # Conservative transport-size heuristic, not a token-count guarantee.
         # Preserve every question/criterion and the identical fair state.
         if len(questions) > 1 and len(json.dumps([state, questions])) > 80000:
