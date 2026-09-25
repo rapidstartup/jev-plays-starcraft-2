@@ -25,8 +25,8 @@ $control = [ordered]@{
   jev_timeout_ms = $timeoutMs
   # State presented to the model: 'compact' (small SystemOne projection) vs
   # 'full' (legacy rich view). Recorded so the bench can tell the two eras apart.
-  state_mode = if ((($env:JEV_COMPACT_STATE) -ne '0') -and (($env:JEV_COMPACT_STATE) -ne 'false')) { 'compact' } else { 'full' }
-  state_budget_chars = if ($env:JEV_CONTEXT_BUDGET_CHARS) { $env:JEV_CONTEXT_BUDGET_CHARS } else { '3000' }
+  state_mode = $(if ((($env:JEV_COMPACT_STATE) -ne '0') -and (($env:JEV_COMPACT_STATE) -ne 'false')) { 'compact' } else { 'full' })
+  state_budget_chars = $(if ($env:JEV_CONTEXT_BUDGET_CHARS) { $env:JEV_CONTEXT_BUDGET_CHARS } else { '3000' })
   openrouter_key_present = [bool]($env:OPENROUTER_API_KEY)
   launched_at = (Get-Date).ToUniversalTime().ToString('o')
   note = 'Launcher-side mirror; harness also writes control.json under runs/<utc-stamp>/'
