@@ -7,6 +7,9 @@ participates in the game loop. This is an experimental player, not a complete ca
 Read [the experiment report](docs/EXPERIMENT_REPORT.md) for measured
 results and failed approaches. The [progression journal](docs/CAMPAIGN_PROGRESS.md)
 contains the latest experiments and current limitations.
+See [the architecture breakdown](docs/ARCHITECTURE.md) for the SC2 layer
+boundaries, portable game-port contract, and staged Fortnite path. **HOLD MERGE**
+until Nathan's card authorizes it.
 
 ## Run
 
