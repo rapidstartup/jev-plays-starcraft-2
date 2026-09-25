@@ -8,6 +8,9 @@ Read [the experiment report](docs/EXPERIMENT_REPORT.md) for measured
 results and failed approaches. The [progression journal](docs/CAMPAIGN_PROGRESS.md)
 contains the latest experiments and current limitations.
 
+Fortnite is only a planned, gated research spike; no Fortnite support is
+claimed. See the [Fortnite adapter spike plan](docs/FORTNITE_SPIKE_PLAN.md).
+
 ## Run
 
 1. Install StarCraft II using Battle.net and finish its download. On this Mac, set
