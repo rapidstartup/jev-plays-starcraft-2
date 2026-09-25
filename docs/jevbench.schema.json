@@ -1,0 +1,190 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jevbench.dev/schemas/result-v1.json",
+  "title": "JevBench result record",
+  "description": "A public-safe benchmark result. It is intentionally not tied to StarCraft II so the same record can describe future JevBench tasks.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "bench_id",
+    "run_id",
+    "status",
+    "source"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0",
+      "description": "Version of this record schema, independent of the harness version."
+    },
+    "bench_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "description": "Stable benchmark or bench-line identifier, such as LD-DG or CC-NANO."
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable identifier for this attempt or cited result."
+    },
+    "track": {
+      "type": "string",
+      "enum": ["test_runs", "copycats_site", "launch_posts"],
+      "description": "One of the three JevBench publication tracks."
+    },
+    "name": {
+      "type": ["string", "null"],
+      "description": "Human-readable benchmark name."
+    },
+    "task": {
+      "type": ["string", "null"],
+      "description": "Task or scenario being measured; may be non-game text."
+    },
+    "map": {
+      "type": ["string", "null"],
+      "description": "Game map or environment label when applicable. Omit for non-game tasks."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["win", "loss", "incomplete", "blocked"],
+      "description": "Canonical public outcome. Raw harness victory/defeat values must be normalized before publishing."
+    },
+    "jev_via": {
+      "type": ["string", "null"],
+      "description": "Decision transport/backend label, for example openrouter or openjev."
+    },
+    "jev_model": {
+      "type": ["string", "null"],
+      "description": "Decision model identifier."
+    },
+    "openjev_base_url": {
+      "type": ["string", "null"],
+      "pattern": "^[^:/?#]+(?::[0-9]+)?$",
+      "description": "Host and optional port only. Never publish a URL containing credentials, paths, query strings, or fragments."
+    },
+    "guide_model": {
+      "type": ["string", "null"],
+      "description": "Optional oversight/guide model identifier."
+    },
+    "memory_mode": {
+      "type": ["string", "null"],
+      "enum": ["none", "cross_run", "cross_game", null],
+      "description": "Memory setting used by the run."
+    },
+    "calls": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Number of decision calls made; null when not measured or not applicable."
+    },
+    "wall_seconds": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "description": "Measured wall-clock duration in seconds."
+    },
+    "cost_usd": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "description": "Measured provider cost in USD. Do not estimate missing costs."
+    },
+    "latency_ms": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "median": {
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "p95": {
+          "type": ["number", "null"],
+          "minimum": 0
+        }
+      },
+      "description": "Measured latency summary. Values are milliseconds, not a service guarantee."
+    },
+    "metrics": {
+      "type": "object",
+      "description": "Optional task-neutral scalar measurements. Keep values measured rather than inferred.",
+      "additionalProperties": {
+        "type": ["number", "string", "boolean", "null"]
+      }
+    },
+    "hq_win_evidence": {
+      "type": ["boolean", "null"],
+      "description": "SC2-specific objective evidence. Null or omitted for other tasks."
+    },
+    "source": {
+      "type": "string",
+      "enum": ["ours", "official"],
+      "description": "Provenance of the published result. Use ours only for an independently run or serviced result."
+    },
+    "source_url": {
+      "type": ["string", "null"],
+      "format": "uri",
+      "description": "Citation for an official result. Do not use this field to publish secrets or private endpoints."
+    },
+    "artifact_paths": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])"
+      },
+      "description": "Relative, public-safe paths or labels for supporting artifacts."
+    },
+    "blocker": {
+      "type": ["string", "null"],
+      "description": "Short blocker explanation; required when status is blocked."
+    },
+    "notes": {
+      "type": ["string", "null"],
+      "description": "Concise context and qualifications for the result."
+    },
+    "started_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "environment": {
+      "type": "object",
+      "description": "Optional public-safe environment labels for non-game or future benchmark tasks.",
+      "additionalProperties": {
+        "type": ["string", "number", "boolean", "null"]
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "source": {"const": "official"}
+        }
+      },
+      "then": {
+        "required": ["source_url"],
+        "properties": {
+          "source_url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {"const": "blocked"}
+        }
+      },
+      "then": {
+        "required": ["blocker"],
+        "properties": {
+          "blocker": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  ]
+}

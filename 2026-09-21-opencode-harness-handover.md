@@ -129,14 +129,17 @@ run-<line-id>.ps1          # preflight → jev-launch-traynor → optional widge
 
 ## 6) Result packet → Gaming Dev (for jevbench.dev)
 
-Return one markdown or JSON blob per finished attempt (win, loss, or blocker):
+Return one markdown or JSON blob per finished attempt (win, loss, or blocker),
+following the [versioned JevBench result schema](docs/JEVBENCH_SCHEMA.md):
 
 ```json
 {
+  "schema_version": "1.0",
   "bench_id": "LD-DG",
   "run_id": "20260921T073335…",
+  "track": "test_runs",
   "map": "traynor01 / Liberation Day",
-  "status": "win | loss | incomplete | blocked",
+  "status": "win",
   "jev_via": "openjev",
   "jev_model": "openjev-latest",
   "openjev_base_url": "192.168.0.10:8011",
