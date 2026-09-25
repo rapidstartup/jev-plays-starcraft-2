@@ -7,6 +7,8 @@ participates in the game loop. This is an experimental player, not a complete ca
 Read [the experiment report](docs/EXPERIMENT_REPORT.md) for measured
 results and failed approaches. The [progression journal](docs/CAMPAIGN_PROGRESS.md)
 contains the latest experiments and current limitations.
+The [Fortnite adapter spike plan](docs/FORTNITE_ADAPTER_SPIKE.md) is a proposal
+only; it does not claim Fortnite support.
 
 ## Run
 
