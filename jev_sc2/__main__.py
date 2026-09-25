@@ -31,12 +31,15 @@ def default_memory_mode():
 
 
 def maybe_send_ui_dismiss_key():
-    """Windows-only: post 'c' then Esc to the SC2 client to close Help/Tutorials panels.
+    """Windows-only: post UI keys to the SC2 client to close Help/Tutorials and
+    activate a default button on an end-of-mission (Defeat/Victory) dialog.
 
     Called only after the game clock has already stalled (no orders progressing),
-    rate-limited by the caller to one attempt per stall warning. Sends no clicks
-    and no game orders — the equivalent of a human closing a help panel:
-    'c' is the SC2 tutorial/help close shortcut, Esc backs out generic menus.
+    rate-limited by the caller. Sends no clicks and no game orders:
+      c     -> closes the SC2 tutorial/help panel
+      Enter -> activates the default button on a mission-result dialog
+      Space -> same as Enter for the result dialog
+      Esc   -> backs out generic menus
     Opt out with JEV_UI_DISMISS=0 (a human then closes the panel instead).
     Returns True when a key was posted.
     """
@@ -52,9 +55,8 @@ def maybe_send_ui_dismiss_key():
         if not hwnd:
             return False
         WM_KEYDOWN, WM_KEYUP = 0x0100, 0x0101
-        VK_ESCAPE, VK_C = 0x1B, 0x43
-        # 'c' closes the tutorial/help panel; Esc backs out any residual menu.
-        for vk in (VK_C, VK_ESCAPE):
+        VK_ESCAPE, VK_C, VK_RETURN, VK_SPACE = 0x1B, 0x43, 0x0D, 0x20
+        for vk in (VK_C, VK_RETURN, VK_SPACE, VK_ESCAPE):
             user32.PostMessageW(hwnd, WM_KEYDOWN, vk, 0)
             user32.PostMessageW(hwnd, WM_KEYUP, vk, 0)
         return True
@@ -513,9 +515,12 @@ async def run(args):
             if observation.observation.game_loop == last_loop:
                 stalled_for = time.monotonic()-clock_changed_at
                 if stalled_for >= 10:
-                    # Help/Tutorials (and other pause UI) freeze the game clock. Leave/rejoin
-                    # recreates the mission and often reopens Help — a bounce loop. Wait for
-                    # a human to CLOSE the panel so the clock advances again.
+                    # A frozen game clock means modal UI: a Help/Tutorial panel OR a
+                    # mission-result (Defeat/Victory) dialog. Both freeze the clock; only
+                    # the tutorial closes with c/Esc. Post the dismiss keys, and if the
+                    # clock stays frozen past JEV_STALL_END_SEC, treat it as a mission end
+                    # screen: no verified objective win was recorded, so record a Defeat
+                    # and end the run instead of waiting on a human forever.
                     if (ui_stall_warned_at is None
                             or time.monotonic()-ui_stall_warned_at >= 30):
                         ui_stall_warned_at = time.monotonic()
@@ -525,11 +530,22 @@ async def run(args):
                             stalled_for_s=round(stalled_for),
                             ui_dismiss_key_sent=dismiss_sent,
                             reason=(
-                                'Game clock stalled (Help/Tutorials/pause). '
-                                'Posted c+Esc to close it. Not leave/rejoin — that '
+                                'Game clock stalled (Help/Tutorials/pause or end screen). '
+                                'Posted c/Enter/Space/Esc. Not leave/rejoin — that '
                                 'reopens Help and loops.'
                             ),
                         )
+                    stall_end = float(os.getenv('JEV_STALL_END_SEC', '120'))
+                    if stalled_for >= stall_end:
+                        pid = outcome.get('player_id') or 1
+                        log('result', players=[{'player': pid, 'result': 'Defeat'}],
+                            loop=observation.observation.game_loop, source='end_screen_stall')
+                        log('stopped', reason=(
+                            'Mission end screen: game clock frozen for %ds and '
+                            'c/Enter/Space/Esc could not dismiss it; no verified '
+                            'objective win -> recorded as Defeat.'
+                        ) % int(stalled_for))
+                        break
                     await asyncio.sleep(0.5)
                     continue
                 await asyncio.sleep(0.2)
