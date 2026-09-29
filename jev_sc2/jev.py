@@ -25,6 +25,12 @@ _OPENJEV_MODEL_MAP = {
     'openjev-latest': 'openjev-latest',
     'openjev-0.1': 'openjev-0.1',
 }
+# Published list prices, USD per million tokens as (input, output). The hosted
+# TypeSafe API returns token counts but no bill, so those decisions are priced
+# here. OpenRouter bills the same tokens at the same rate, so both routes agree.
+_PUBLISHED_RATES = {
+    'jev-1.13.0': (0.042, 0.0),
+}
 DEFAULT_OPENJEV_BASE_URL = 'https://api.codiv.ai'
 _LOCAL_OPENJEV_HOSTS = frozenset({
     'localhost', '127.0.0.1', '::1', '192.168.0.10',
@@ -283,6 +289,21 @@ def _normalize_via(raw):
     )
 
 
+def priced_cost(model, usage):
+    """Cost of one decision from its token counts at the published rate.
+
+    None when the model has no published rate or the usage carries no tokens.
+    """
+    rate = _PUBLISHED_RATES.get(model)
+    if rate is None or not isinstance(usage, dict):
+        return None
+    tokens_in = usage.get('input_tokens')
+    if not isinstance(tokens_in, (int, float)) or isinstance(tokens_in, bool):
+        return None
+    tokens_out = usage.get('output_tokens') or 0
+    return (tokens_in * rate[0] + tokens_out * rate[1]) / 1_000_000
+
+
 def _openjev_api_key():
     return (
         (os.environ.get('CODIV_API_KEY') or '').strip()
@@ -478,5 +499,11 @@ class Jev:
             usage = dumped.get('usage') if isinstance(dumped, dict) else None
             if isinstance(usage, dict) and usage.get('cost') is not None:
                 self.cost += usage['cost']
-            # else: no cost field - leave cost unchanged (increment 0); don't crash
+            elif self.via == 'typesafe':
+                # Hosted API: tokens but no bill. Self-hosted OpenJev stays at zero.
+                served = dumped.get('model') if isinstance(dumped, dict) else None
+                cost = priced_cost(served, usage)
+                if cost is None:
+                    cost = priced_cost(self.model, usage)
+                self.cost += cost or 0
             return dumped

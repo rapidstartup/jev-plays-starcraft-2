@@ -1413,3 +1413,57 @@ def test_still_running_respects_only_positive_seconds():
     from jev_sc2.controller_log import normalize_budget
     assert normalize_budget(0) is None
     assert normalize_budget(1800) == 1800
+
+
+def test_priced_cost_reproduces_an_openrouter_bill():
+    from jev_sc2.jev import priced_cost
+    # A real decision: OpenRouter billed 0.000128394 for these tokens.
+    usage = {'input_tokens': 3057, 'output_tokens': 115}
+    assert priced_cost('jev-1.13.0', usage) == pytest.approx(0.000128394)
+    assert priced_cost('unpriced-model', usage) is None
+    assert priced_cost('jev-1.13.0', {}) is None
+    assert priced_cost('jev-1.13.0', None) is None
+
+
+def _systemone_cost(monkeypatch, via, payload, **env):
+    """Run one System One decision against a stubbed client and return the accrued cost."""
+    from types import SimpleNamespace
+    import jev_sc2.jev as module
+
+    class Client:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *exc): return False
+        async def system_one(self, **kwargs):
+            return SimpleNamespace(model_dump=lambda: payload)
+
+    monkeypatch.setattr(module, 'AsyncTypeSafeClient', Client)
+    monkeypatch.setenv('JEV_VIA', via)
+    monkeypatch.setenv('TYPESAFE_API_KEY', 'test-key-not-a-credential')
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    jev = module.Jev(lambda *a, **k: None, 'test-cost')
+    asyncio.run(jev._ask_systemone({'objective': 'win'}, {}))
+    assert jev.calls == 1
+    return jev.cost
+
+
+def test_typesafe_route_prices_tokens_when_the_api_returns_no_bill(monkeypatch):
+    payload = {'model': 'jev-1.13.0', 'answers': {},
+               'usage': {'input_tokens': 1_000_000, 'output_tokens': 40_000}}
+    # Output tokens are not billed.
+    assert _systemone_cost(monkeypatch, 'typesafe', payload) == pytest.approx(0.042)
+
+
+def test_typesafe_route_prefers_a_bill_when_one_is_returned(monkeypatch):
+    payload = {'model': 'jev-1.13.0', 'answers': {},
+               'usage': {'input_tokens': 1_000_000, 'output_tokens': 0, 'cost': 0.5}}
+    assert _systemone_cost(monkeypatch, 'typesafe', payload) == pytest.approx(0.5)
+
+
+def test_self_hosted_openjev_is_not_priced(monkeypatch):
+    payload = {'model': 'jev-1.13.0', 'answers': {},
+               'usage': {'input_tokens': 1_000_000, 'output_tokens': 0}}
+    cost = _systemone_cost(monkeypatch, 'openjev', payload, JEV_MODEL='openjev',
+                           OPENJEV_BASE_URL='http://127.0.0.1:8080')
+    assert cost == 0
