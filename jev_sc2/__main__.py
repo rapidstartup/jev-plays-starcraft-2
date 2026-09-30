@@ -8,6 +8,7 @@ import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 from openrouter.errors import PaymentRequiredResponseError
 from s2clientprotocol import sc2api_pb2 as sc, error_pb2
@@ -82,6 +83,13 @@ def _control_openjev_host(jev_via):
     return openjev_host_only(resolve_openjev_base_url())
 
 
+def _control_spark_host(jev_via):
+    if jev_via not in ('spark', 'trio-spark', 'trio_spark'):
+        return None
+    value = os.getenv('TRIO_SPARK_ENDPOINT') or 'https://platform.machinefi.com/api/spark/v1/decisions'
+    return urlparse(value).hostname
+
+
 def write_control_json(directory, args, stamp):
     """Record launch knobs for every entry point (single-mission and campaign)."""
     timeout_ms = int(os.getenv('JEV_TIMEOUT_MS', '5000'))
@@ -118,6 +126,10 @@ def write_control_json(directory, args, stamp):
             or os.getenv('TYPESAFE_API_KEY')
         ),
         'openjev_base_url': _control_openjev_host(
+            (os.getenv('JEV_VIA') or 'openrouter').strip().lower() or 'openrouter'
+        ),
+        'trio_spark_key_present': bool(os.getenv('TRIO_SPARK_API_KEY')),
+        'trio_spark_endpoint_host': _control_spark_host(
             (os.getenv('JEV_VIA') or 'openrouter').strip().lower() or 'openrouter'
         ),
         'launched_at': datetime.now(timezone.utc).isoformat(),
@@ -750,4 +762,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
