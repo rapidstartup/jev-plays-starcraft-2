@@ -427,6 +427,9 @@ class Jev:
             return {**left, **right}
         if self.max_calls is not None and self.max_calls > 0 and self.calls + self.inflight >= self.max_calls:
             raise CallBudgetReached()
+        if (self.via == 'spark' and self.max_calls is not None and
+                self.calls + len(questions) > self.max_calls):
+            raise CallBudgetReached()
         self.inflight += 1
         try:
             started = time.monotonic()
@@ -585,11 +588,12 @@ class Jev:
             total_input_tokens += tokens
             billing = result.get('billing') or {}
             try:
-                total_cost += int(billing.get('amount_nano_usd', 0)) / 1_000_000_000
+                request_cost = int(billing.get('amount_nano_usd', 0)) / 1_000_000_000
             except (TypeError, ValueError):
-                pass
+                request_cost = 0.0
+            total_cost += request_cost
+            self.cost += request_cost
             self.calls += 1
-        self.cost += total_cost
         return {
             'model': self.model,
             'answers': answers,

@@ -1502,3 +1502,18 @@ def test_trio_spark_choice_transport(monkeypatch):
     assert client.calls == 1
     assert client.cost == pytest.approx(0.00000336)
     assert events[0][1]['via'] == 'trio_spark_api'
+
+
+def test_trio_spark_does_not_partially_spend_last_call(monkeypatch):
+    import jev_sc2.jev as module
+    monkeypatch.setenv('JEV_VIA', 'spark')
+    monkeypatch.setenv('TRIO_SPARK_API_KEY', 'test-key-not-a-credential')
+    client = module.Jev(lambda *args, **kwargs: None, 'spark-budget', max_calls=1)
+    questions = {
+        'a': {'type': 'choice', 'instructions': 'A', 'criteria': {'x': 'X', 'y': 'Y'}},
+        'b': {'type': 'choice', 'instructions': 'B', 'criteria': {'x': 'X', 'y': 'Y'}},
+    }
+    with pytest.raises(module.CallBudgetReached):
+        asyncio.run(client.ask({}, questions))
+    assert client.calls == 0
+    assert client.cost == 0
