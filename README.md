@@ -33,6 +33,13 @@ extend that slightly so a finished-in-time call is not dropped). SC2 keeps runni
 the harness exits. Stop it through its UI when finished. Runs and replays live in
 `runs/` and stay out of Git. The provider-side key spending cap is separate from the per-run call budget.
 
+### Run with Trio-Spark
+
+The harness can also evaluate MachineFi's hosted Trio-Spark decision model. Set
+`JEV_VIA=spark`, `JEV_MODEL=trio-spark-preview`, and `TRIO_SPARK_API_KEY`, then
+use the same commands above. Each game `Choice` becomes one Trio-Spark decision;
+the legal action set and full returned probability distribution stay in the run log.
+
 ## Live experiments
 
 Edit **player.py**, then commit. The orchestrator loads the source from the new Git

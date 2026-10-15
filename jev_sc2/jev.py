@@ -3,6 +3,9 @@ import os
 import json
 import asyncio
 import time
+import urllib.error
+import urllib.request
+import uuid
 from urllib.parse import urlparse
 from openrouter import OpenRouter
 from openrouter.errors import BadRequestResponseError
@@ -284,8 +287,10 @@ def _normalize_via(raw):
         return 'typesafe'
     if via in ('openjev', 'codiv'):
         return 'openjev'
+    if via in ('spark', 'trio-spark', 'trio_spark'):
+        return 'spark'
     raise ValueError(
-        f'JEV_VIA must be openrouter, typesafe, openjev, or codiv; got {via!r}'
+        f'JEV_VIA must be openrouter, typesafe, openjev, codiv, or spark; got {via!r}'
     )
 
 
@@ -347,6 +352,16 @@ class Jev:
             self.base_url = resolve_openjev_base_url()
             self.model = _resolve_openjev_model(raw_model)
             self.via_label = openjev_via_label(self.base_url)
+            self.client = None
+        elif via == 'spark':
+            key = (os.environ.get('TRIO_SPARK_API_KEY') or '').strip()
+            if not key:
+                raise RuntimeError('Set TRIO_SPARK_API_KEY for JEV_VIA=spark')
+            self.api_key = key
+            self.base_url = (os.environ.get('TRIO_SPARK_ENDPOINT') or
+                             'https://platform.machinefi.com/api/spark/v1/decisions').rstrip('/')
+            self.model = os.environ.get('TRIO_SPARK_MODEL') or 'trio-spark-preview'
+            self.via_label = 'trio_spark_api'
             self.client = None
         else:
             key = os.environ.get('OPENROUTER_API_KEY')
@@ -412,11 +427,16 @@ class Jev:
             return {**left, **right}
         if self.max_calls is not None and self.max_calls > 0 and self.calls + self.inflight >= self.max_calls:
             raise CallBudgetReached()
+        if (self.via == 'spark' and self.max_calls is not None and
+                self.calls + len(questions) > self.max_calls):
+            raise CallBudgetReached()
         self.inflight += 1
         try:
             started = time.monotonic()
             if self.via in ('typesafe', 'openjev'):
                 result = await self._ask_systemone(state, questions)
+            elif self.via == 'spark':
+                result = await self._ask_spark(state, questions)
             else:
                 result = await self._ask_openrouter(state, questions)
             self.log(
@@ -507,3 +527,79 @@ class Jev:
                     cost = priced_cost(self.model, usage)
                 self.cost += cost or 0
             return dumped
+
+    async def _ask_spark(self, state, questions):
+        """Map each Choice question to Spark's one-decision production API."""
+        answers = {}
+        total_input_tokens = 0
+        total_cost = 0.0
+        for name, question in questions.items():
+            if question.get('type') != 'choice':
+                raise ValueError('The StarCraft harness sends Choice questions to Trio-Spark')
+            if self.max_calls is not None and self.calls >= self.max_calls:
+                raise CallBudgetReached()
+            criteria = question.get('criteria') or {}
+            if not 2 <= len(criteria) <= 8:
+                raise ValueError('Trio-Spark accepts 2 to 8 choices per decision')
+            payload = {
+                'model': self.model,
+                'task': question.get('instructions') or 'Choose the best next move.',
+                'state': state,
+                'choices': [
+                    {'id': str(key), 'description': str(description)}
+                    for key, description in criteria.items()
+                ],
+            }
+
+            def request_one():
+                request = urllib.request.Request(
+                    self.base_url,
+                    data=json.dumps(payload).encode('utf-8'),
+                    method='POST',
+                    headers={
+                        'Authorization': f'Bearer {self.api_key}',
+                        'Content-Type': 'application/json',
+                        'Idempotency-Key': str(uuid.uuid4()),
+                        'User-Agent': 'JevBench-Games-Trio-Spark/1.0',
+                    },
+                )
+                try:
+                    with urllib.request.urlopen(request, timeout=self.timeout_ms / 1000) as response:
+                        return json.load(response)
+                except urllib.error.HTTPError as error:
+                    detail = error.read().decode('utf-8', errors='replace')[:300]
+                    raise RuntimeError(f'Trio-Spark HTTP {error.code}: {detail}') from None
+
+            result = await asyncio.to_thread(request_one)
+            probabilities = {
+                str(item.get('choice_id', item.get('id'))): float(item['probability'])
+                for item in result.get('probabilities', [])
+            }
+            if set(probabilities) != set(criteria):
+                raise RuntimeError('Trio-Spark probability labels do not match the legal moves')
+            answers[name] = {
+                'type': 'choice',
+                'choice': result.get('choice_id'),
+                'probabilities': probabilities,
+                'confidence': result.get('confidence'),
+            }
+            usage = result.get('usage') or {}
+            tokens = usage.get('billed_input_tokens') or usage.get('input_tokens') or 0
+            total_input_tokens += tokens
+            billing = result.get('billing') or {}
+            try:
+                request_cost = int(billing.get('amount_nano_usd', 0)) / 1_000_000_000
+            except (TypeError, ValueError):
+                request_cost = 0.0
+            total_cost += request_cost
+            self.cost += request_cost
+            self.calls += 1
+        return {
+            'model': self.model,
+            'answers': answers,
+            'usage': {
+                'input_tokens': total_input_tokens,
+                'output_tokens': 0,
+                'cost': total_cost,
+            },
+        }

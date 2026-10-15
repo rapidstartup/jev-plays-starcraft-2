@@ -1467,3 +1467,53 @@ def test_self_hosted_openjev_is_not_priced(monkeypatch):
     cost = _systemone_cost(monkeypatch, 'openjev', payload, JEV_MODEL='openjev',
                            OPENJEV_BASE_URL='http://127.0.0.1:8080')
     assert cost == 0
+
+
+def test_trio_spark_choice_transport(monkeypatch):
+    import jev_sc2.jev as module
+
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *exc): return False
+
+    monkeypatch.setenv('JEV_VIA', 'spark')
+    monkeypatch.setenv('JEV_MODEL', 'trio-spark-preview')
+    monkeypatch.setenv('TRIO_SPARK_API_KEY', 'test-key-not-a-credential')
+    monkeypatch.setattr(module.urllib.request, 'urlopen', lambda *args, **kwargs: Response())
+    monkeypatch.setattr(module.json, 'load', lambda response: {
+        'choice_id': 'attack',
+        'probabilities': [
+            {'choice_id': 'hold', 'probability': 0.2},
+            {'choice_id': 'attack', 'probability': 0.8},
+        ],
+        'confidence': 0.8,
+        'usage': {'billed_input_tokens': 80},
+        'billing': {'amount_nano_usd': '3360'},
+    })
+    events = []
+    client = module.Jev(lambda event, **fields: events.append((event, fields)), 'spark-test')
+    result = asyncio.run(client.ask(
+        {'objective': 'win'},
+        {'strategy': {'type': 'choice', 'instructions': 'Choose',
+                      'criteria': {'hold': 'Hold position', 'attack': 'Attack'}}},
+    ))
+    assert result['strategy']['choice'] == 'attack'
+    assert result['strategy']['probabilities'] == {'hold': 0.2, 'attack': 0.8}
+    assert client.calls == 1
+    assert client.cost == pytest.approx(0.00000336)
+    assert events[0][1]['via'] == 'trio_spark_api'
+
+
+def test_trio_spark_does_not_partially_spend_last_call(monkeypatch):
+    import jev_sc2.jev as module
+    monkeypatch.setenv('JEV_VIA', 'spark')
+    monkeypatch.setenv('TRIO_SPARK_API_KEY', 'test-key-not-a-credential')
+    client = module.Jev(lambda *args, **kwargs: None, 'spark-budget', max_calls=1)
+    questions = {
+        'a': {'type': 'choice', 'instructions': 'A', 'criteria': {'x': 'X', 'y': 'Y'}},
+        'b': {'type': 'choice', 'instructions': 'B', 'criteria': {'x': 'X', 'y': 'Y'}},
+    }
+    with pytest.raises(module.CallBudgetReached):
+        asyncio.run(client.ask({}, questions))
+    assert client.calls == 0
+    assert client.cost == 0
